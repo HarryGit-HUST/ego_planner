@@ -50,6 +50,8 @@ public:
     // 2. 主循环滴答函数：在 main 的 while 循环里以 20Hz 频率被疯狂调用。
     // 负责：推动状态机流转。
     void tick();
+    // [修复 1] 暴露一个 public 方法给 main.cpp 查询连接状态
+    bool isConnected() const { return is_connected_; }
 
 private:
     // ================= 内部属性 =================
@@ -66,12 +68,13 @@ private:
     double init_yaw_;
     ros::Time hover_start_time_;
 
-    // 从 YAML 读进来的参数写进一个内部结构体，保持整洁
+    // [修复 2] 补全所有的航点参数，否则 cpp 找不到变量！
     struct Param
     {
         double takeoff_height;
-        std::vector<Eigen::Vector2d> waypoints; // 航点列表
-        // ... 降落等其他参数
+        Eigen::Vector2d wp_recog;
+        Eigen::Vector2d wp_airdrop;
+        Eigen::Vector2d wp_strike;
     } param_;
 
     // 当前正在飞第几个航点

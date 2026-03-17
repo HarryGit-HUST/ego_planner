@@ -59,31 +59,35 @@ public:
                                  Eigen::Vector2d &grad,
                                  double &penetration_depth) const;
 
-private:
-    // ================= 测绘部的私有财产 =================
+        // [修复 8] 把这个函数从 private 挪到 public，允许 A* 部门调用！
+        // BFS 广度优先搜索：如果在障碍物内部，向外寻找最近的安全点 (为了算梯度)
+        bool searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d &free_pt) const;
 
-    // 1. 动态二维数组，存储栅格占据概率 (0~100)
-    std::vector<int> occupancy_buffer_;
+    private:
+        // ================= 测绘部的私有财产 =================
 
-    // 2. 高精电子围栏 (写死在测绘部内部)
-    std::vector<StaticWall> static_walls_;
+        // 1. 动态二维数组，存储栅格占据概率 (0~100)
+        std::vector<int> occupancy_buffer_;
 
-    // 3. 地图的物理属性
-    struct Param
-    {
-        double resolution;
-        double width_m;
-        double height_m;
-        double origin_x;
-        double origin_y;
-        int decay_rate;
-        float front_x;
-        float back_x;
-        float left_y;
-        float right_y;
-        float exp;
-        float intensity_threshold; // [修复] 加上了分号！
-    } param_;
+        // 2. 高精电子围栏 (写死在测绘部内部)
+        std::vector<StaticWall> static_walls_;
+
+        // 3. 地图的物理属性
+        struct Param
+        {
+            double resolution;
+            double width_m;
+            double height_m;
+            double origin_x;
+            double origin_y;
+            int decay_rate;
+            float front_x;
+            float back_x;
+            float left_y;
+            float right_y;
+            float exp;
+            float intensity_threshold; // [修复] 加上了分号！
+        } param_;
 
     int grid_w_;
     int grid_h_;
@@ -100,8 +104,7 @@ private:
 
     void buildStaticWalls(double start_x, double start_y);
 
-    // BFS 广度优先搜索：如果在障碍物内部，向外寻找最近的安全点 (为了算梯度)
-    bool searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d &free_pt) const;
+    
 };
 
 #endif // GRID_MAP_H

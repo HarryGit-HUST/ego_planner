@@ -27,18 +27,20 @@ public:
 
     // 2. 核心指令：要求 CEO 马上生成一条从 start 到 target 的避障轨迹
     // 返回值：如果成功找到路返回 true，如果彻底死锁返回 false
-    bool replan(const Eigen::Vector3d &start_pt,
-                const Eigen::Vector3d &start_vel,
-                const Eigen::Vector3d &target_pt);
+    // [修复 3] 将 Vector3d 降维为 Vector2d，与 cpp 一致！
+    bool replan(const Eigen::Vector2d &start_pt,
+                const Eigen::Vector2d &target_pt);
 
     // 3. 轨迹查询：Boss 拿着当前时间 t 来问 CEO，飞机现在该飞到哪个位置？
     // 这个函数供飞控在 50Hz 的 tick() 循环里疯狂调用
-    Eigen::Vector3d getPosition(double t_sec);
-    Eigen::Vector3d getVelocity(double t_sec);
-
+    //[修复 4] 将 Vector3d 降维为 Vector2d，与 cpp 一致！
+    Eigen::Vector2d getPosition(double t_sec);
+    Eigen::Vector2d getVelocity(double t_sec);
     // 4. 突发检查：当前正在飞的轨迹，前方是不是突然出现了新障碍物？
     bool checkCollision();
     void buildWalls(double start_x, double start_y);
+    // [修复 5] 暴露获取轨迹开始时间的方法，供 Boss 计算时间戳
+    ros::Time getTrajStartTime() const { return traj_start_time_; }
 
 private:
     // ================= 雇佣的下属部门 (智能指针) =================

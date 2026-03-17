@@ -1,5 +1,6 @@
 #include "bspline_optimizer.h"
 #include <iostream>
+#include "grid_map.h"
 
 BsplineOptimizer::BsplineOptimizer() {}
 BsplineOptimizer::~BsplineOptimizer() {}

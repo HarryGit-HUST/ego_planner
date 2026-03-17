@@ -1,6 +1,11 @@
 #include "ego_planner_manager.h"
 #include <iostream>
-
+// [修复 9]：极其关键！既然你在这个 cpp 里用到了这些类的具体方法，必须包含它们的真实头文件！
+#include "grid_map.h"
+#include "a_star.h"
+#include "bspline_optimizer.h"
+PlannerManager::PlannerManager() {}
+PlannerManager::~PlannerManager() {}
 // (初始化等基础函数省略，你需要自己把指针实例化、并赋值给下属)
 void PlannerManager::init(ros::NodeHandle &nh)
 {

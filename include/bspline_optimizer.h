@@ -59,14 +59,16 @@ private:
     int order_;               // B 样条阶数 (默认 3 阶)
     int pt_num_;              // 控制点总数
     double bspline_interval_; // 节点时间间隔 dt
-
+                              // [修复 6] 添加缺失的 control_points_ 成员变量！
+    Eigen::MatrixXd control_points_;
     // ========================================================================
     // 内部数学引擎：代价与梯度计算 (The Math Core)
     // 计算总代价 Cost，并把每个控制点受到的推力 (Gradient) 填入 grad 矩阵
     // ========================================================================
 
     // 总线函数：汇总所有代价
-    void combineCost(const double *x, double *grad, double &f_combine);
+    //[修复 7] 将 double* 参数改为 Eigen::MatrixXd，与 cpp 一致！
+    void combineCost(const Eigen::MatrixXd &q_free, double &f_combine, Eigen::MatrixXd &g_free);
 
     // 分项代价 1：平滑度 (惩罚控制点之间的距离不均和急折角)
     void calcSmoothnessCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient);

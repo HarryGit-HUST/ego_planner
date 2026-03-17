@@ -1,0 +1,23 @@
+# 无人机规划器 - 栅格地图全参数配置
+planner:
+  # 地图基础配置
+  map_resolution: 0.1
+  map_width_m: 20.0
+  map_height_m: 20.0
+  map_origin_x: -5.0
+  map_origin_y: -10.0
+
+  # 地图衰减/更新速率
+  map_decay_rate: 5
+
+  # 局部地图视野范围配置
+  map_front_x: 5.3
+  map_back_x: -0.5
+  map_left_y: 1.0
+  map_right_y: -7.5
+
+  # 地图膨胀/指数系数
+  map_exp: 0.2
+
+  # 障碍物强度阈值
+  map_intensity_threshold: 10.0

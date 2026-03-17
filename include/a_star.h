@@ -27,6 +27,14 @@ struct AStarNode
     AStarNode(Eigen::Vector2i idx, Eigen::Vector2d p)
         : index(idx), pos(p), g_score(1e9), f_score(1e9), parent(nullptr), state(0) {}
 };
+// 2. 优先队列比较器：让队列按 f_score 从小到大排序（最小堆）
+struct NodeComparator
+{
+    bool operator()(const AStarNode *a, const AStarNode *b) const
+    {
+        return a->f_score > b->f_score;
+    }
+};
 
 // =========================================================
 // 探路部 (AStar 算法引擎)

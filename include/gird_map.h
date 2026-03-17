@@ -45,15 +45,19 @@ public:
     bool posToIndex(const Eigen::Vector2d &pos, int &gx, int &gy) const;
     void indexToPos(int gx, int gy, Eigen::Vector2d &pos) const;
 
-    // =================================================================
-    // 【核心 API 组 2】：提供给 L-BFGS 优化器使用的连续梯度接口 (ESDF-Free 核心)
-    // =================================================================
+    int getGridW() const;
+    int getGridH() const;
 
-    // 灵魂函数：检查某一个控制点 pt 是否陷入了障碍物？
-    // 如果陷入了，返回 true，并且通过引用带回“逃生方向 (grad)”和“陷入深度 (penetration_depth)”
-    bool getObstacleGradient(const Eigen::Vector2d &pt,
-                             Eigen::Vector2d &grad,
-                             double &penetration_depth) const;
+
+        // =================================================================
+        // 【核心 API 组 2】：提供给 L-BFGS 优化器使用的连续梯度接口 (ESDF-Free 核心)
+        // =================================================================
+
+        // 灵魂函数：检查某一个控制点 pt 是否陷入了障碍物？
+        // 如果陷入了，返回 true，并且通过引用带回“逃生方向 (grad)”和“陷入深度 (penetration_depth)”
+        bool getObstacleGradient(const Eigen::Vector2d &pt,
+                                 Eigen::Vector2d &grad,
+                                 double &penetration_depth) const;
 
 private:
     // ================= 测绘部的私有财产 =================
@@ -72,7 +76,13 @@ private:
         double height_m;
         double origin_x;
         double origin_y;
-        double obstacle_inflation; // 膨胀半径
+        int decay_rate;          // 衰减速率
+        float front_x ;
+        float back_x ;
+        float left_y;
+        float right_y;
+        float exp; // 墙体厚度/安全余量
+        float intensity_threshold
     } param_;
 
     int grid_w_;
@@ -81,15 +91,12 @@ private:
     // ================= 测绘部的私有通信设备 =================
     ros::Subscriber cloud_sub_;
     ros::Publisher map_pub_;
-    ros::Timer map_update_timer_; // 定时器：负责处理地图衰减记忆
+
 
     // ================= 测绘部的工作手册 =================
 
     // 当收到雷达点云时触发，只负责把点云画到 occupancy_buffer_ 里
     void cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg);
-
-    // 定时器触发，让旧的障碍物慢慢变淡消失
-    void decayMapCallback(const ros::TimerEvent &e);
 
     // 初始化时建好四堵虚拟墙
     void buildStaticWalls();

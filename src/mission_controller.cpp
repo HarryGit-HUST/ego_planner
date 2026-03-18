@@ -2,7 +2,11 @@
 #include "ego_planner_manager.h" // 包含你的 CEO
 #include <cmath>
 
-MissionController::MissionController() : current_state_(MissionState::IDLE) {}
+MissionController::MissionController()
+    : current_state_(MissionState::IDLE),
+      is_connected_(false),
+      has_global_plan_(false),
+      init_yaw_(0.0) {}
 MissionController::~MissionController() {}
 
 // ============================================================================
@@ -10,22 +14,54 @@ MissionController::~MissionController() {}
 // ============================================================================
 void MissionController::init(ros::NodeHandle &nh)
 {
-    // 读取 YAML 里的比赛任务航点 (相对于起飞点的偏移量)
-    nh.param("mission/takeoff_height", param_.takeoff_height, 1.2);
+    // ==========================================================
+    // [高阶工程规范]：异常捕获 (Try-Catch) 关键参数校验
+    // ==========================================================
+    try
+    {
+        std::vector<double> pt;
 
-    std::vector<double> pt;
-    if (nh.getParam("mission/wp_recognition", pt))
+        // 读取任务一/二识别区坐标
+        if (!nh.getParam("mission/wp_recognition", pt) || pt.size() < 2)
+        {
+            throw std::runtime_error("缺少关键航点参数: mission/wp_recognition");
+        }
         param_.wp_recog = Eigen::Vector2d(pt[0], pt[1]);
-    if (nh.getParam("mission/wp_airdrop", pt))
+
+        // 读取任务三/四空投区坐标
+        if (!nh.getParam("mission/wp_airdrop", pt) || pt.size() < 2)
+        {
+            throw std::runtime_error("缺少关键航点参数: mission/wp_airdrop");
+        }
         param_.wp_airdrop = Eigen::Vector2d(pt[0], pt[1]);
-    if (nh.getParam("mission/wp_strike", pt))
+
+        // 读取任务五攻击区坐标
+        if (!nh.getParam("mission/wp_strike", pt) || pt.size() < 2)
+        {
+            throw std::runtime_error("缺少关键航点参数: mission/wp_strike");
+        }
         param_.wp_strike = Eigen::Vector2d(pt[0], pt[1]);
 
+        // 非致命参数，给个默认值即可
+        nh.param("mission/takeoff_height", param_.takeoff_height, 0.7);
+    }
+    catch (const std::exception &e)
+    {
+        // 一旦抛出异常，终端标红打印，并直接强行终止整个 ROS 节点！
+        ROS_FATAL_STREAM("[Boss] 致命配置错误: " << e.what() << " (请检查 astar.yaml 文件是否加载正确！)");
+        ros::shutdown();    // 优雅关闭 ROS
+        exit(EXIT_FAILURE); // 强行退出进程
+    }
+
+    // ==========================================================
     // 实例化并初始化 CEO (PlannerManager)
+    // ==========================================================
     planner_manager_ = std::make_shared<PlannerManager>();
     planner_manager_->init(nh);
 
+    // ==========================================================
     // 设置 ROS 通信
+    // ==========================================================
     state_sub_ = nh.subscribe<mavros_msgs::State>("/mavros/state", 10, &MissionController::stateCallback, this);
     odom_sub_ = nh.subscribe<nav_msgs::Odometry>("/mavros/local_position/odom", 10, &MissionController::odomCallback, this);
     setpoint_pub_ = nh.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 10);
@@ -33,7 +69,7 @@ void MissionController::init(ros::NodeHandle &nh)
     arming_client_ = nh.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
     set_mode_client_ = nh.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
 
-    ROS_INFO("[Boss] 任务指挥官已就绪！");
+    ROS_INFO("[Boss] 任务指挥官已就绪！各项比赛参数读取无误。");
 }
 
 // ============================================================================
@@ -95,17 +131,20 @@ void MissionController::tick()
     case MissionState::IDLE:
         if (setOffboardAndArm())
         {
-            // 【核心：记录 Init XYZ】 只有在切 OFFBOARD 解锁成功的瞬间，才记录绝对零点
+            // 1. 记录真实的物理起飞点
             init_pos_ = current_pos_;
             init_yaw_ = current_yaw_;
 
-            // 把 YAML 里的相对航点，加上真正的物理起点，变成世界绝对坐标
+            // 2. 【核心添加】Boss 下令：按照我现在的脚下位置，把虚拟围墙给我建起来！
+            planner_manager_->buildWalls(init_pos_.x(), init_pos_.y());
+
+            // 3. 把相对航点转为世界绝对坐标
             param_.wp_recog += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
             param_.wp_airdrop += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
             param_.wp_strike += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
 
             current_state_ = MissionState::TAKEOFF;
-            ROS_INFO(">>> [任务开始] 起飞点已锁定，开始爬升！");
+            ROS_INFO(">>> [任务开始] 起飞点已锁定，虚拟围墙已升起，开始爬升！");
         }
         break;
 
@@ -229,8 +268,7 @@ void MissionController::tick()
 
     // -----------------------------------------------------------
     case MissionState::FINISHED:
-        // TODO: 发送 MAVROS 锁定命令 (Disarm)
-        setpoint_raw.type_mask = 0;
+        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), 0.0, init_yaw_);
         // disarmDrone();
         ROS_INFO_THROTTLE(5.0, ">>> 任务已完成，等待裁判检查...");
         break;

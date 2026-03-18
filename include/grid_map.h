@@ -76,13 +76,13 @@ private:
         double height_m;
         double origin_x;
         double origin_y;
-        int decay_rate;          // 衰减速率
-        float front_x ;
-        float back_x ;
+        int decay_rate;
+        float front_x;
+        float back_x;
         float left_y;
         float right_y;
-        float exp; // 墙体厚度/安全余量
-        float intensity_threshold
+        float exp;
+        float intensity_threshold; // [修复] 加上了分号！
     } param_;
 
     int grid_w_;
@@ -98,8 +98,7 @@ private:
     // 当收到雷达点云时触发，只负责把点云画到 occupancy_buffer_ 里
     void cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg);
 
-    // 初始化时建好四堵虚拟墙
-    void buildStaticWalls();
+    void buildStaticWalls(double start_x, double start_y);
 
     // BFS 广度优先搜索：如果在障碍物内部，向外寻找最近的安全点 (为了算梯度)
     bool searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d &free_pt) const;

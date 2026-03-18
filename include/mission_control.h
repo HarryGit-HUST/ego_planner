@@ -53,11 +53,18 @@ public:
 
 private:
     // ================= 内部属性 =================
-    MissionState current_state_;  // 当前状态
-    Eigen::Vector3d current_pos_; // 当前飞机绝对位置
-    double current_yaw_;          // 当前机头朝向
-    bool is_armed_;               // 是否解锁
-    std::string current_mode_;    // 当前飞行模式 (如 "OFFBOARD")
+    MissionState current_state_;
+    Eigen::Vector3d current_pos_;
+    double current_yaw_;
+    std::string current_mode_;
+
+    // [修复] 补全缺失的控制变量
+    mavros_msgs::State mavros_state_;
+    bool is_connected_;
+    bool has_global_plan_;
+    Eigen::Vector3d init_pos_;
+    double init_yaw_;
+    ros::Time hover_start_time_;
 
     // 从 YAML 读进来的参数写进一个内部结构体，保持整洁
     struct Param

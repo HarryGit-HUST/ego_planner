@@ -38,6 +38,7 @@ public:
 
     // 4. 突发检查：当前正在飞的轨迹，前方是不是突然出现了新障碍物？
     bool checkCollision();
+    void buildWalls(double start_x, double start_y);
 
 private:
     // ================= 雇佣的下属部门 (智能指针) =================

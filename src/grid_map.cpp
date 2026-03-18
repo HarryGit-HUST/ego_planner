@@ -31,7 +31,7 @@ void GridMap::init(ros::NodeHandle &nh)
     grid_h_ = std::ceil(param_.height_m / param_.resolution);
     occupancy_buffer_.assign(grid_w_ * grid_h_, 0);
 
-    buildStaticWalls();
+    //buildStaticWalls(start_x, start_y);
 
     // 订阅 2D ROI 点云
     cloud_sub_ = nh.subscribe("/projected_accumulated_cloud", 1, &GridMap::cloudCallback, this);
@@ -72,33 +72,32 @@ void GridMap::clearMap()
     std::fill(occupancy_buffer_.begin(), occupancy_buffer_.end(), 0);
 }
 
-void GridMap::buildStaticWalls()
+void GridMap::buildStaticWalls(double start_x, double start_y)
 {
-    // 假设场地数据（相对于起飞点）
+    // [修复] 强行绑定真实的起飞原点，防止里程计漂移导致墙体错位！
+    float f_x = start_x + param_.front_x;
+    float b_x = start_x + param_.back_x;
+    float l_y = start_y + param_.left_y;
+    float r_y = start_y + param_.right_y;
 
-
-    // 定义 4 堵墙的矩形物理边界 [min_x, max_x, min_y, max_y]
     std::vector<std::vector<float>> walls = {
-        {param_.front_x - param_.exp, param_.front_x + param_.exp, param_.right_y, param_.left_y}, // 前墙
-        {param_.back_x - param_.exp, param_.back_x + param_.exp, param_.right_y, param_.left_y},   // 后墙
-        {param_.back_x, param_.front_x, param_.left_y - param_.exp, param_.left_y + param_.exp},   // 左墙
-        {param_.back_x, param_.front_x, param_.right_y - param_.exp, param_.right_y + param_.exp}  // 右墙
+        {f_x - param_.exp, f_x + param_.exp, r_y, l_y}, // 前墙
+        {b_x - param_.exp, b_x + param_.exp, r_y, l_y}, // 后墙
+        {b_x, f_x, l_y - param_.exp, l_y + param_.exp}, // 左墙
+        {b_x, f_x, r_y - param_.exp, r_y + param_.exp}  // 右墙
     };
 
     for (const auto &w : walls)
     {
         int min_gx, min_gy, max_gx, max_gy;
-        // 把物理坐标转为栅格坐标
         posToIndex(Eigen::Vector2d(w[0], w[2]), min_gx, min_gy);
         posToIndex(Eigen::Vector2d(w[1], w[3]), max_gx, max_gy);
 
-        // 限制在地图范围内
         min_gx = std::max(0, min_gx);
         min_gy = std::max(0, min_gy);
         max_gx = std::min(grid_w_ - 1, max_gx);
         max_gy = std::min(grid_h_ - 1, max_gy);
 
-        // 涂黑栅格地图：值为 1000 代表绝对不可衰减的静态墙
         for (int x = min_gx; x <= max_gx; ++x)
         {
             for (int y = min_gy; y <= max_gy; ++y)
@@ -107,10 +106,8 @@ void GridMap::buildStaticWalls()
             }
         }
     }
-    ROS_INFO("[GridMap] 静态高精电子围栏已刻入地图！");
+    ROS_INFO("[GridMap] 静态高精电子围栏已刻入地图！原点:(%.2f, %.2f)", start_x, start_y);
 }
-
-
 
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
 {

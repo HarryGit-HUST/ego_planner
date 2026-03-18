@@ -111,3 +111,12 @@ bool PlannerManager::checkCollision()
     }
     return false;
 }
+
+void PlannerManager::buildWalls(double start_x, double start_y)
+{
+    // CEO 不亲自干活，直接使唤底层的 grid_map_ 部门去建墙
+    if (grid_map_ != nullptr)
+    {
+        grid_map_->buildStaticWalls(start_x, start_y);
+    }
+}

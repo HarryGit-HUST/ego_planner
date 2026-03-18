@@ -1,0 +1,22 @@
+# ------------------- ROS 编译/构建目录 -------------------
+/build/
+/devel/
+/install/
+*.egg-info/
+
+# ------------------- CMake 自动生成文件 -------------------
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+build_environment.sh
+compile_commands.json
+
+# ------------------- 其他常见忽略 -------------------
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+!.vscode/settings.json
+!.vscode/launch.json

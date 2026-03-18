@@ -5,6 +5,10 @@
 #include <ros/ros.h>
 #include <memory>
 #include <vector>
+extern "C"
+{
+#include "lbfgs.h"
+}
 
 // 引入底层环境 (眼睛)
 class GridMap;

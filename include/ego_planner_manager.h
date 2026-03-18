@@ -59,20 +59,6 @@ private:
         double ctrl_pt_dist; // 控制点之间的间隔
         // ... 其他由 CEO 管控的参数
     } param_;
-
-    // ================= 内部工作流 (流水线拆解) =================
-    // replan() 函数太长了，CEO 会把它拆成几个内部步骤：
-
-    // 步骤 A：命令 A* 探路，并提取出初始的 B 样条控制点
-    bool generateInitialControlPoints(const Eigen::Vector3d &start_pt,
-                                      const Eigen::Vector3d &target_pt,
-                                      std::vector<Eigen::Vector3d> &init_pts);
-
-    // 步骤 B：把初始点丢给优化器，推离障碍物
-    bool optimizeTrajectory(std::vector<Eigen::Vector3d> &ctrl_pts);
-
-    // 步骤 C：检查动力学，如果超速了，就把轨迹时间拉长 (Time Reallocation)
-    bool refineTrajectoryTime(UniformBspline &traj);
 };
 
 #endif // PLANNER_MANAGER_H

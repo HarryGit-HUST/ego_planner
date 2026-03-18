@@ -21,3 +21,33 @@ planner:
 
   # 障碍物强度阈值
   map_intensity_threshold: 10.0
+
+  # 无人机B样条轨迹优化器参数配置
+bspline_optimizer:
+  # 平滑性权重（轨迹越丝滑，值越大）
+  weight_smooth: 1.0
+  # 避障碰撞权重（越重视避障，值越大）
+  weight_collision: 2.0
+  # 动力学可行性权重（速度/加速度约束）
+  weight_feasibility: 1.0
+
+  # 无人机最大速度限制 (m/s)
+  max_vel: 1.0
+  # 无人机最大加速度限制 (m/s²)
+  max_acc: 1.0
+
+  # 避障安全距离 (米)，无人机与障碍物的最小距离
+  safe_distance: 0.5
+
+  # 优化最大迭代次数
+  max_iteration_num: 300
+
+  # 规划管理器参数
+max_vel: 1.0
+max_acc: 1.0
+ctrl_pt_dist: 0.1
+
+mission:
+  wp_recognition: [4.0, 0.0]
+  wp_airdrop: [4.0, -3.5]
+  wp_strike: [0.0, -3.5]

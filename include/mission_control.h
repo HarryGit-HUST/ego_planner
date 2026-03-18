@@ -24,15 +24,17 @@ class PlannerManager;
 // 任务状态机
 enum class MissionState
 {
-    IDLE,            // 地面怠速，等待解锁
-    TAKEOFF,         // 起飞爬升
-    WAYPOINT_NAV,    // 航点避障飞行 (呼叫 CEO PlannerManager)
-    VISION_ACCEPT,     // 视觉识别目标，等待结果
-    TURN_1,           // 第一次转向，调整姿态
-    THROW_MISSION,       // 投掷任务，飞行到指定位置投掷物品
-    VISION_DETECT,    //视觉识别靶标，准备击穿
-    LANDING_DESCEND, // 垂直降落
-    FINISHED         // 任务结束，停桨
+    IDLE,             // 地面怠速，等待解锁
+    TAKEOFF,          // 起飞爬升
+    NAV_RECOG_AREA,   // 前往目标识别区
+    HOVER_RECOGNIZE,  // 识别区悬停识别
+    NAV_AIRDROP_AREA, // 前往空投区
+    HOVER_AIRDROP,    // 空投区悬停空投
+    NAV_STRIKE_AREA,  // 前往打击区
+    LASER_STRIKE,     // 激光打击
+    RETURN_TO_LAUNCH, // 全速返航
+    LANDING,           // 降落
+    FINISHED        // 任务完成，停桨
 };
 class MissionController
 {
@@ -61,7 +63,7 @@ private:
     struct Param
     {
         double takeoff_height;
-        std::vector<Eigen::Vector3d> waypoints; // 航点列表
+        std::vector<Eigen::Vector2d> waypoints; // 航点列表
         // ... 降落等其他参数
     } param_;
 
@@ -86,13 +88,22 @@ private:
     void odomCallback(const nav_msgs::Odometry::ConstPtr &msg);
 
     // 状态机行为函数 (拆分 tick，让代码极其清爽)
-    void handleIdle();
+    /*
+       void handleIdle();
     void handleTakeoff();
     void handleWaypointNav();
     // void handleVisionCross(); ...
 
+    */
+
     // 通用飞控动作
     bool setOffboardAndArm();
+
+    // 核心飞行命令：飞到 XY 点，保持当前高度和机头朝向
+    bool flyToXY(const Eigen::Vector2d &target_xy);
+
+    //发布飞控命令
+    void publishSetpoint(const Eigen::Vector2d &xy, double z, double yaw);
 };
 
 #endif // MISSION_CONTROLLER_H

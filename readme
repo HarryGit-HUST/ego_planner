@@ -1,0 +1,38 @@
+# 🚀 EGO-Planner 级无人机全自主任务调度与避障框架
+
+基于 **L-BFGS 最优化数学库与 ESDF-Free 碰撞梯度** 的顶级时空解耦局部轨迹规划器（核心思想致敬浙大 FAST 实验室的 EGO-Planner）。
+
+## 核心技术栈与特色
+
+1.  **ESDF-Free 纯数学避障 (BsplineOptimizer)**
+    *   直接使用 L-BFGS 库对 B 样条控制点进行梯度下降拉扯。
+    *   在遇到障碍物时，通过 GridMap 内部 BFS 搜寻最近的“水面”，计算逃生法向量（梯度），并对碰撞深度产生二次惩罚代价，瞬间挤出绝对平滑、绝不撞墙的曲线。
+2.  **机头锁死横向滑移 (Yaw Locked Strafing)**
+    *   避障期间强行剥夺 Yaw 偏航控制，只做 X/Y 轴的平移（螃蟹步）。
+    *   彻底消除了旋转带来的雷达点云畸变（果冻效应）和 SLAM 里程计的短时漂移（Drift），从而根除了环境重影 Bug！
+3.  **高精电子围栏 (Geofencing)**
+    *   预先读入比赛场地的四周长宽，在初始化瞬间将场地外全部判定为 1000 死亡禁区。
+    *   彻底关闭了对场地边界墙体的实时计算（CPU 负载暴降），无人机绝不可能飞出场外！
+4.  **四层架构解耦 (MVC 模式)**
+    *   `MissionController` (任务指挥层) $\rightarrow$ `PlannerManager` (调度层) $\rightarrow$ `UniformBspline` (数学层) $\rightarrow$ `GridMap` (感知层)。
+    *   任务逻辑和避障数学完全分离，做识别的队友再也不用看那堆微积分代码了！
+
+---
+
+## 🎮 队友使用指南：如何修改任务状态机？
+
+你的工作区完全被隔离在 **`mission_controller.cpp`** 文件中。你只需要关注 `MissionController::tick()` 里的那个巨大的 `switch-case` 状态机！
+
+### 1. 如何让飞机前往一个新的坐标？
+你不需要懂 A*，也不需要管避障。只需要在 `tick()` 函数中调用我为你写好的神级封装函数：**`flyToXY(target_point)`**。
+
+```cpp
+case MissionState::NAV_RECOG_AREA:
+    // flyToXY 内部会自动探路、避障、平滑绕弯
+    if (flyToXY(param_.wp_recog)) {
+        // 如果返回 true，说明距离目标点已经小于 0.2m，到达啦！
+        current_state_ = MissionState::HOVER_RECOGNIZE;
+        hover_start_time_ = ros::Time::now(); // 启动悬停倒计时
+        ROS_INFO(">>> 到达识别区，准备执行视觉任务！");
+    }
+    break;

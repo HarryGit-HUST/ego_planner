@@ -156,7 +156,8 @@ void PlannerManager::publishVisualization()
     }
 
     // 3. 发送 B 样条绿色圆球平滑轨迹
-    if (local_traj_.getTimeSum() > 0)
+    // [修复] 检查控制点是否有效，防止空轨迹导致段错误
+    if (local_traj_.getTimeSum() > 0 && local_traj_.getControlPoints().cols() >= 4)
     {
         visualization_msgs::Marker msg;
         msg.header.stamp = ros::Time::now();

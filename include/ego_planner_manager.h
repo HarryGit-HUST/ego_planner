@@ -6,6 +6,9 @@
 #include <memory>
 #include <vector>
 
+#include <nav_msgs/Path.h>
+#include <visualization_msgs/Marker.h>
+
 // 引入 B 样条数学类（因为我们要向 Boss 返回曲线数据，必须知道它长什么样）
 // 假设你底层写了一个 uniform_bspline.h
 #include "uniform_bspline.h"
@@ -42,6 +45,8 @@ public:
     // [修复 5] 暴露获取轨迹开始时间的方法，供 Boss 计算时间戳
     ros::Time getTrajStartTime() const { return traj_start_time_; }
 
+    void publishVisualization(); // 暴露给 Boss 的一键可视化接口
+
 private:
     // ================= 雇佣的下属部门 (智能指针) =================
     // 使用 shared_ptr，生命周期由 CEO 统一管理
@@ -49,10 +54,16 @@ private:
     std::shared_ptr<AStar> a_star_;
     std::shared_ptr<BsplineOptimizer> optimizer_;
 
+    ros::Publisher astar_pub_;
+    ros::Publisher bspline_pub_;
+    std::vector<Eigen::Vector2d> last_astar_path_; // 存一下 A* 出来的折线用于画图
+
     // ================= 轨迹档案室 =================
     // 每次 replan 成功后，将最终曲线存放在这里
     UniformBspline local_traj_;
     ros::Time traj_start_time_; // 这条轨迹是几分几秒开始执行的？(极其重要)
+
+    
 
     // ================= CEO 的私有配置参数 =================
     struct Param

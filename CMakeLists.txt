@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.0.2)
 project(ego_planner)
 
 ## 必须开启 C++14 或 17 以支持较新的 PCL 和 Eigen
+set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

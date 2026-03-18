@@ -64,6 +64,8 @@ public:
         bool searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d &free_pt) const;
         void buildStaticWalls(double start_x, double start_y);
 
+        void publishMap();
+
     private:
         // ================= 测绘部的私有财产 =================
 

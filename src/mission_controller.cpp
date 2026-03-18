@@ -97,6 +97,12 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 
     if (need_replan)
     {
+        // ==========================================================
+        // [防坠机核心补丁]：在进入可能耗时的 replan 之前，强行塞一个心跳包给飞控！
+        // 保证 PX4 绝对不会因为计算阻塞而掉出 OFFBOARD 模式
+        // ==========================================================
+        publishSetpoint(curr_xy, param_.takeoff_height, current_yaw_);
+        ros::spinOnce(); // 强行把缓存里的位置消息发出去！
         if (planner_manager_->replan(curr_xy, target_xy))
         {
             has_global_plan_ = true;
@@ -287,8 +293,15 @@ void MissionController::tick()
         ROS_ERROR("未知的任务状态！");
         break;
     }
-    
-    
+    // ==========================================================
+    // [新增可视化触发]：在 20Hz 的控制循环中，以 5Hz (每4次tick) 的频率更新 RViz
+    // 既不卡顿飞控指令，又能获得流畅的动画
+    // ==========================================================
+    static int viz_count = 0;
+    if (++viz_count % 4 == 0)
+    {
+        planner_manager_->publishVisualization();
+    }
 }
 
 // ============================================================================

@@ -25,6 +25,10 @@ void PlannerManager::init(ros::NodeHandle &nh)
 
     optimizer_->setEnvironment(grid_map_); // [修复] 名字统一
     optimizer_->setParam(nh);
+
+    // 1. 在 init 函数末尾加上：
+    astar_pub_ = nh.advertise<nav_msgs::Path>("/viz/astar_path", 1);
+    bspline_pub_ = nh.advertise<visualization_msgs::Marker>("/viz/bspline_traj", 1);
 }
 bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector2d &target_pt)
 {
@@ -35,6 +39,7 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
         ROS_WARN("[CEO] A* 寻路失败！前方完全封闭！");
         return false; // 死胡同
     }
+    last_astar_path_ = astar_path; // 【新增】保存折线用于画图
 
     //[核心修复 1] 正确计算 B样条的时间间隔 ts
     // 计算 A* 路径总长度
@@ -123,5 +128,62 @@ void PlannerManager::buildWalls(double start_x, double start_y)
     if (grid_map_ != nullptr)
     {
         grid_map_->buildStaticWalls(start_x, start_y);
+    }
+}
+
+void PlannerManager::publishVisualization()
+{
+    // 1. 使唤测绘部发二维地图
+    if (grid_map_)
+        grid_map_->publishMap();
+
+    // 2. 发送 A* 蓝色折线
+    if (!last_astar_path_.empty())
+    {
+        nav_msgs::Path msg;
+        msg.header.stamp = ros::Time::now();
+        msg.header.frame_id = "map";
+        for (const auto &p : last_astar_path_)
+        {
+            geometry_msgs::PoseStamped ps;
+            ps.pose.position.x = p.x();
+            ps.pose.position.y = p.y();
+            ps.pose.position.z = 1.0; // 悬浮在Z=1处，防止被地图遮挡
+            ps.pose.orientation.w = 1.0;
+            msg.poses.push_back(ps);
+        }
+        astar_pub_.publish(msg);
+    }
+
+    // 3. 发送 B 样条绿色圆球平滑轨迹
+    if (local_traj_.getTimeSum() > 0)
+    {
+        visualization_msgs::Marker msg;
+        msg.header.stamp = ros::Time::now();
+        msg.header.frame_id = "map";
+        msg.ns = "bspline";
+        msg.id = 0;
+        msg.type = visualization_msgs::Marker::SPHERE_LIST;
+        msg.action = visualization_msgs::Marker::ADD;
+        msg.scale.x = 0.1;
+        msg.scale.y = 0.1;
+        msg.scale.z = 0.1;
+        msg.color.a = 1.0;
+        msg.color.r = 0.0;
+        msg.color.g = 1.0;
+        msg.color.b = 0.0; // 绿色
+
+        double t_sum = local_traj_.getTimeSum();
+        // 每隔 0.05 秒抽样一个点画个绿球
+        for (double t = 0; t <= t_sum; t += 0.05)
+        {
+            Eigen::Vector2d pt = local_traj_.evaluateDeBoor(t);
+            geometry_msgs::Point p;
+            p.x = pt.x();
+            p.y = pt.y();
+            p.z = 1.0;
+            msg.points.push_back(p);
+        }
+        bspline_pub_.publish(msg);
     }
 }

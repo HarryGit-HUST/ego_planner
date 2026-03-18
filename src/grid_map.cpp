@@ -36,6 +36,9 @@ void GridMap::init(ros::NodeHandle &nh)
     // 订阅 2D ROI 点云
     cloud_sub_ = nh.subscribe("/projected_accumulated_cloud", 1, &GridMap::cloudCallback, this);
 
+    // 在 init 函数的末尾，加上这一句发布器声明：
+    map_pub_ = nh.advertise<nav_msgs::OccupancyGrid>("/viz/grid_map", 1, true);
+
     ROS_INFO("[GridMap] 测绘部初始化完成! 地图尺寸: %d x %d", grid_w_, grid_h_);
 }
 
@@ -102,7 +105,7 @@ void GridMap::buildStaticWalls(double start_x, double start_y)
         {
             for (int y = min_gy; y <= max_gy; ++y)
             {
-                occupancy_buffer_[x + y * grid_w_] = 1000;
+                occupancy_buffer_[x + y * grid_w_] = 1000; // 1000 代表静态墙，永远不会衰减
             }
         }
     }
@@ -229,4 +232,33 @@ int GridMap::getGridW() const
 int GridMap::getGridH() const
 {
     return grid_h_;
+}
+
+// 在文件末尾，加上发布地图的实现函数：
+void GridMap::publishMap()
+{
+    if (occupancy_buffer_.empty())
+        return;
+
+    nav_msgs::OccupancyGrid msg;
+    msg.header.stamp = ros::Time::now();
+    msg.header.frame_id = "map"; // RViz里的 Fixed Frame 记得填 "map" 或 "local_origin"
+    msg.info.resolution = param_.resolution;
+    msg.info.width = grid_w_;
+    msg.info.height = grid_h_;
+    msg.info.origin.position.x = param_.origin_x;
+    msg.info.origin.position.y = param_.origin_y;
+    msg.info.origin.orientation.w = 1.0;
+
+    msg.data.resize(grid_w_ * grid_h_);
+    for (int i = 0; i < grid_w_ * grid_h_; ++i)
+    {
+        if (occupancy_buffer_[i] == 1000)
+            msg.data[i] = 100; // 静态虚拟墙：纯黑
+        else if (occupancy_buffer_[i] >= 999)
+            msg.data[i] = 80; // 雷达障碍物：深灰
+        else
+            msg.data[i] = 0; // 安全区：纯白
+    }
+    map_pub_.publish(msg);
 }

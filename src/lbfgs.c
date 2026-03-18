@@ -86,7 +86,7 @@ licence.
 
 #else
 /* No CPU specific optimization. */
-//#include "arithmetic_ansi.h"
+#include "arithmetic_ansi.h"
 
 #endif
 

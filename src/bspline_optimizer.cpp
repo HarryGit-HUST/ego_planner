@@ -25,7 +25,7 @@ void BsplineOptimizer::setEnvironment(std::shared_ptr<GridMap> map)
 // [核心修复] L-BFGS 回调接口：只处理“自由控制点”
 // ============================================================================
 // 找到原来的 costFunction，完全替换为下面这段：
-double BsplineOptimizer::costFunction(void *instance, const double *x, double *grad, const int n)
+double BsplineOptimizer::costFunction(void *instance, const double *x, double *grad, const int n,const double step)
 {
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(instance);
     double cost;

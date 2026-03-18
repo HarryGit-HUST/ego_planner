@@ -83,7 +83,7 @@ private:
     // C++ 与 C 的终极桥梁：L-BFGS 静态回调函数
     // L-BFGS 库通常是纯 C 语言写的，只认静态函数指针，我们必须用一个壳把它映射回类的内部！
     // ========================================================================
-    static double costFunction(void *instance, const double *x, double *g, const int n);
+    static double costFunction(void *instance, const double *x, double *g, const int n, const double step);
 };
 
 #endif // BSPLINE_OPTIMIZER_H

@@ -1,0 +1,6 @@
+<launch>
+    <node pkg="ego_planner" type="ego_planner" name="ego_planner_node" output="screen">
+        <rosparam command="load" file="$(find ego_planner)/config/ego_planner.yaml" />
+    </node>
+
+</launch>

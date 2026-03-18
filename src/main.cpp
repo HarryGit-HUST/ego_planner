@@ -35,8 +35,13 @@ int main(int argc, char **argv)
 
     // 3. 启动主循环
     ROS_INFO(">>> 比赛正式开始！ <<<");
+    int flag=0;
     while (ros::ok())
-    {
+    {if(flag==0)
+        {
+            ROS_INFO(">>> happy begin <<<");
+            flag=1;
+        }
         ros::spinOnce();
         boss.tick(); // 驱动任务状态机
         rate.sleep();

@@ -120,8 +120,8 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
         }
     }
 
-    // 2. 接收新的点云
-    pcl::PointCloud<pcl::PointXYZI> cloud;
+    // 2. 接收新的点云 (使用 PointXYZ 而非 PointXYZI，避免 intensity 字段缺失问题)
+    pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
     for (const auto &pt : cloud.points)
@@ -130,11 +130,8 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
         if (!posToIndex(Eigen::Vector2d(pt.x, pt.y), gx, gy))
             continue;
 
-        if (pt.intensity > param_.intensity_threshold)
-        {
-            occupancy_buffer_[gx + gy * grid_w_] = std::max(occupancy_buffer_[gx + gy * grid_w_], 999);
-            // 设为 999 是为了和静态墙 1000 区分，且兼容你的 isOccupied(>50) 逻辑
-        }
+        // 直接将所有点视为障碍物
+        occupancy_buffer_[gx + gy * grid_w_] = std::max(occupancy_buffer_[gx + gy * grid_w_], 999);
     }
 }
 

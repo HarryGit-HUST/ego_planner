@@ -61,6 +61,11 @@ void MissionController::init(ros::NodeHandle &nh)
     planner_manager_->init(nh);
 
     // ==========================================================
+    // 保存 NodeHandle 到成员变量（供后续动态参数设置使用）
+    // ==========================================================
+    nh_ = nh;
+
+    // ==========================================================
     // 设置 ROS 通信
     // ==========================================================
     state_sub_ = nh.subscribe<mavros_msgs::State>("/mavros/state", 10, &MissionController::stateCallback, this);
@@ -123,6 +128,7 @@ void MissionController::tick()
 {
     // 安全防线：确保有数据
     if (!is_connected_)
+    
         return;
 
     switch (current_state_)
@@ -130,14 +136,14 @@ void MissionController::tick()
 
     // -----------------------------------------------------------
     case MissionState::IDLE:
+        ROS_WARN_THROTTLE(0.5, "[IDLE] 尝试解锁和切换 OFFBOARD...");
         if (setOffboardAndArm())
         {
             // 1. 记录真实的物理起飞点
             init_pos_ = current_pos_;
             init_yaw_ = current_yaw_;
 
-            // 2. 【核心添加】Boss 下令：按照我现在的脚下位置，把虚拟围墙给我建起来！
-            planner_manager_->buildWalls(init_pos_.x(), init_pos_.y());
+
 
             // 3. 把相对航点转为世界绝对坐标
             param_.wp_recog += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
@@ -158,6 +164,10 @@ void MissionController::tick()
         {
             current_state_ = MissionState::NAV_RECOG_AREA;
             has_global_plan_ = false;
+            nh_.setParam("/pcl_enable", true);
+            ROS_INFO("[Boss] PCL 已启用！");
+             // 2. 【核心添加】Boss 下令：按照我现在的脚下位置，把虚拟围墙给我建起来！
+            planner_manager_->buildWalls(init_pos_.x(), init_pos_.y());
             ROS_INFO(">>> [任务一] 爬升完毕，前往目标识别区！");
         }
         break;
@@ -273,7 +283,12 @@ void MissionController::tick()
         // disarmDrone();
         ROS_INFO_THROTTLE(5.0, ">>> 任务已完成，等待裁判检查...");
         break;
+    default:
+        ROS_ERROR("未知的任务状态！");
+        break;
     }
+    
+    
 }
 
 // ============================================================================
@@ -293,22 +308,68 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, double z, dou
 
 bool MissionController::setOffboardAndArm()
 {
-    static ros::Time last_req = ros::Time::now();
-    if (mavros_state_.mode != "OFFBOARD" && (ros::Time::now() - last_req > ros::Duration(1.0)))
+    static ros::Time last_mode_req = ros::Time::now();
+    static ros::Time last_arm_req = ros::Time::now();
+    static bool has_sent_setpoint = false;
+    
+    // 调试输出：当前状态
+    ROS_WARN_THROTTLE(0.5, "[setOffboardAndArm] mode=%s, armed=%d", 
+                      mavros_state_.mode.c_str(), mavros_state_.armed);
+    
+    // 【关键】PX4 要求：切换 OFFBOARD 前必须先发送至少 1 秒的设定点
+    if (!has_sent_setpoint)
+    {
+        // 先发送当前位置作为设定点
+        publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()), 
+                        current_pos_.z(), current_yaw_);
+        ROS_INFO_THROTTLE(0.5, "[setOffboardAndArm] 发送设定点以准备 OFFBOARD...");
+        
+        // 等待 1.5 秒后再尝试切换
+        if (ros::Time::now() - last_mode_req > ros::Duration(1.5))
+        {
+            has_sent_setpoint = true;
+        }
+        return false;
+    }
+    
+    // 【修改 1】OFFBOARD 模式请求
+    if (mavros_state_.mode != "OFFBOARD" && (ros::Time::now() - last_mode_req > ros::Duration(1.0)))
     {
         mavros_msgs::SetMode srv;
         srv.request.custom_mode = "OFFBOARD";
-        set_mode_client_.call(srv);
-        last_req = ros::Time::now();
+        ROS_INFO("[setOffboardAndArm] 请求切换到 OFFBOARD 模式...");
+        
+        if (set_mode_client_.call(srv) && srv.response.mode_sent)
+        {
+            ROS_INFO("[setOffboardAndArm] OFFBOARD 切换成功！");
+        }
+        else
+        {
+            ROS_WARN("[setOffboardAndArm] OFFBOARD 切换失败，重试...");
+        }
+        last_mode_req = ros::Time::now();
     }
-    else if (!mavros_state_.armed && (ros::Time::now() - last_req > ros::Duration(1.0)))
+    
+    // 【修改 2】解锁请求 - 使用独立的计时器，更频繁地尝试
+    if (!mavros_state_.armed && (ros::Time::now() - last_arm_req > ros::Duration(0.5)))
     {
         mavros_msgs::CommandBool srv;
         srv.request.value = true;
-        arming_client_.call(srv);
-        last_req = ros::Time::now();
+        ROS_INFO("[setOffboardAndArm] 请求解锁...");
+        
+        if (arming_client_.call(srv) && srv.response.success)
+        {
+            ROS_INFO("[setOffboardAndArm] 解锁成功！");
+        }
+        else
+        {
+            ROS_WARN("[setOffboardAndArm] 解锁服务调用失败，请检查 PX4 安全条件");
+        }
+        last_arm_req = ros::Time::now();
     }
-    return (mavros_state_.mode == "OFFBOARD" && mavros_state_.armed);
+
+    // 【修改 3】只要解锁了就返回 true，让状态机进入 TAKEOFF
+    return mavros_state_.armed;
 }
 
 void MissionController::stateCallback(const mavros_msgs::State::ConstPtr &msg)

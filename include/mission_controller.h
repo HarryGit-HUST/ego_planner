@@ -81,6 +81,7 @@ private:
     int current_wp_index_;
 
     // ================= ROS 通信句柄 =================
+    ros::NodeHandle nh_;
     ros::Subscriber state_sub_;
     ros::Subscriber odom_sub_;
     ros::Publisher setpoint_pub_;

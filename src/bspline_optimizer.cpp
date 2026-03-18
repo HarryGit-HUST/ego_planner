@@ -24,16 +24,23 @@ void BsplineOptimizer::setEnvironment(std::shared_ptr<GridMap> map)
 // ============================================================================
 // [核心修复] L-BFGS 回调接口：只处理“自由控制点”
 // ============================================================================
+// 找到原来的 costFunction，完全替换为下面这段：
 double BsplineOptimizer::costFunction(void *instance, const double *x, double *grad, const int n)
 {
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(instance);
     double cost;
 
-    // n 是自由变量的总维度 (自由点数 * 2)。我们将一维 x 映射为 Eigen 矩阵
-    Eigen::Map<const Eigen::MatrixXd> q_free(x, 2, n / 2);
-    Eigen::Map<Eigen::MatrixXd> g_free(grad, 2, n / 2);
+    // 1. 将 C 语言的 1D 数组映射并拷贝为 Eigen 矩阵
+    Eigen::MatrixXd q_free = Eigen::Map<const Eigen::MatrixXd>(x, 2, n / 2);
+    // 2. 创建一个真实的 Eigen 矩阵来接梯度
+    Eigen::MatrixXd g_free = Eigen::MatrixXd::Zero(2, n / 2);
 
+    // 3. 计算代价和梯度
     opt->combineCost(q_free, cost, g_free);
+
+    // 4. 将算好的梯度写回 C 语言的 grad 数组
+    Eigen::Map<Eigen::MatrixXd>(grad, 2, n / 2) = g_free;
+
     return cost;
 }
 
@@ -88,7 +95,7 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
     lbfgs_params.past = 3;
 
     double final_cost;
-    int ret = lbfgs_optimize(
+    int ret = lbfgs(
         x_vec.size(), x_vec.data(), &final_cost,
         BsplineOptimizer::costFunction, nullptr, this, &lbfgs_params);
 

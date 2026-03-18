@@ -1,6 +1,7 @@
 #include "mission_controller.h"
 #include "ego_planner_manager.h" // 包含你的 CEO
 #include <cmath>
+#include <tf/transform_datatypes.h>
 
 MissionController::MissionController()
     : current_state_(MissionState::IDLE),

@@ -62,6 +62,7 @@ public:
         // [修复 8] 把这个函数从 private 挪到 public，允许 A* 部门调用！
         // BFS 广度优先搜索：如果在障碍物内部，向外寻找最近的安全点 (为了算梯度)
         bool searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d &free_pt) const;
+        void buildStaticWalls(double start_x, double start_y);
 
     private:
         // ================= 测绘部的私有财产 =================
@@ -102,7 +103,7 @@ public:
     // 当收到雷达点云时触发，只负责把点云画到 occupancy_buffer_ 里
     void cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg);
 
-    void buildStaticWalls(double start_x, double start_y);
+    
 
     
 };

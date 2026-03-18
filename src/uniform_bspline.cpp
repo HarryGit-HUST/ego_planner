@@ -34,7 +34,12 @@ void UniformBspline::buildKnotVector()
 
 double UniformBspline::getTimeSum() const
 {
-    
+    // [防崩溃核心补丁]：如果该 B 样条还没被真实数据初始化，直接返回 0！
+    if (knot_.size() == 0)
+    {
+        return 0.0;
+    }
+
     return knot_(m_ - p_) - knot_(p_);
 }
 

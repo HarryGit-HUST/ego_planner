@@ -44,29 +44,41 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
         return false;
     }
 
-    last_astar_path_ = astar_path; // 留着画图用
-    ROS_INFO("[CEO] A* 寻路成功，节点数: %zu", astar_path.size());
+    last_astar_path_ = astar_path;
+    ROS_INFO("[CEO] A* 寻路成功，拐角节点数: %zu", astar_path.size());
 
-    double total_len = 0.0;
+    // =========================================================================
+    // [史诗级修复 1] 路径重采样 (Resampling)：将稀疏的拐角点变成密集的控制点！
+    // =========================================================================
+    std::vector<Eigen::Vector2d> dense_path;
     for (size_t i = 0; i < astar_path.size() - 1; ++i)
     {
-        total_len += (astar_path[i + 1] - astar_path[i]).norm();
+        Eigen::Vector2d p1 = astar_path[i];
+        Eigen::Vector2d p2 = astar_path[i + 1];
+        double seg_len = (p2 - p1).norm();
+
+        // 按照 yaml 里的 ctrl_pt_dist (比如 0.3m) 插入中间点
+        int num_pts = std::max(1, (int)std::ceil(seg_len / param_.ctrl_pt_dist));
+        for (int j = 0; j < num_pts; ++j)
+        {
+            dense_path.push_back(p1 + (p2 - p1) * ((double)j / num_pts));
+        }
     }
+    dense_path.push_back(astar_path.back()); // 补上最后一个点
 
-    // [防 NaN 核心补丁] 如果起点离终点太近，强行保底！
-    if (total_len < 0.1)
-        total_len = 0.1;
-
-    double total_time = total_len / param_.max_vel;
-    int num_segments = std::max(1, (int)(total_len / param_.ctrl_pt_dist));
-    double ts = total_time / num_segments;
-
-    if (ts < 0.01)
-        ts = 0.05; // 绝对禁止 ts 为 0 导致 L-BFGS 除以零！
+    // [史诗级修复 2] 正确的时间步长 ts
+    // 现在相邻两个点之间的物理距离严格等于 ctrl_pt_dist
+    // 匀速飞行的时间间隔 ts = 距离 / 最大速度
+    double ts = param_.ctrl_pt_dist / param_.max_vel;
+    if (ts < 0.05)
+        ts = 0.05; // 防 NaN 保护
 
     Eigen::MatrixXd ctrl_pts;
-    UniformBspline::parameterizeToBspline(ts, astar_path, std::vector<Eigen::Vector2d>(), ctrl_pts);
+    UniformBspline::parameterizeToBspline(ts, dense_path, std::vector<Eigen::Vector2d>(), ctrl_pts);
 
+    ROS_INFO("[CEO] 重采样完成，生成密集控制点数: %ld, ts: %.3f", ctrl_pts.cols(), ts);
+
+    // 呼叫 L-BFGS！此时有几十个自由点，一旦碰到障碍物，优化器会疯狂迭代将其推开！
     if (!optimizer_->optimize(ctrl_pts, ts))
     {
         ROS_ERROR("[CEO] B样条轨迹优化崩溃！");
@@ -83,7 +95,7 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
     }
 
     traj_start_time_ = ros::Time::now();
-    ROS_INFO("[CEO] ✅ 全局轨迹生成成功并归档！");
+    ROS_INFO("[CEO] ✅ 全局轨迹生成成功并归档！总飞行时长: %.2f 秒", local_traj_.getTimeSum());
     return true;
 }
 

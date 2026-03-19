@@ -205,23 +205,22 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::
     mavros_msgs::PositionTarget msg;
     msg.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
 
-    // 掩码魔法：启用 Pos X/Y/Z (0,1,2), Vel X/Y (3,4), Yaw (10)
-    // 忽略 Vel Z(5), Acc(6,7,8), Force(9), YawRate(11)
-    // 对应的二进制: 0b10 1111 100 000 = 3040
-    msg.type_mask = 3040;
+    // [安全修复] 纯位置+偏航控制。忽略速度、加速度和力。
+    // 掩码 3064 = 0b1011 1111 1000
+    msg.type_mask = 3064;
 
     msg.position.x = xy.x();
     msg.position.y = xy.y();
-    msg.position.z = z; // 绝对高度 Z
+    msg.position.z = z;
 
-    msg.velocity.x = vel_xy.x(); // 前馈速度 X
-    msg.velocity.y = vel_xy.y(); // 前馈速度 Y
+    // (速度虽然忽略，但也赋个 0 防御)
+    msg.velocity.x = 0;
+    msg.velocity.y = 0;
     msg.velocity.z = 0;
 
     msg.yaw = yaw;
     setpoint_pub_.publish(msg);
 }
-
 bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 {
     Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());

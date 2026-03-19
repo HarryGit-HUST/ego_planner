@@ -10,9 +10,9 @@ PlannerManager::~PlannerManager() {}
 void PlannerManager::init(ros::NodeHandle &nh)
 {
     // 1. 从ROS参数服务器读取配置
-    nh.param("max_vel", param_.max_vel, 1.0);
-    nh.param("max_acc", param_.max_acc, 1.0);
-    nh.param("ctrl_pt_dist", param_.ctrl_pt_dist, 0.1);
+    nh.param("manager/max_vel", param_.max_vel, 1.0);
+    nh.param("manager/max_acc", param_.max_acc, 1.0);
+    nh.param("manager/ctrl_pt_dist", param_.ctrl_pt_dist, 0.1);
 
     // 2. 实例化所有子模块（关键：智能指针初始化）
     grid_map_ = std::make_shared<GridMap>();

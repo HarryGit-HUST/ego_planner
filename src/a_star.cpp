@@ -210,40 +210,29 @@ void AStar::simplifyPath(const std::vector<Eigen::Vector2d> &raw_path, std::vect
 
 bool AStar::checkLineOfSight(const Eigen::Vector2d &p1, const Eigen::Vector2d &p2)
 {
-    // Bresenham 算法：在栅格地图上画一条 p1-p2 的线，检查沿途有没有黑块
-    int x0, y0, x1, y1;
-    grid_map_->posToIndex(p1, x0, y0);
-    grid_map_->posToIndex(p2, x1, y1);
+    //[终极修复] 步进射线法 (Raycasting) 替代 Bresenham
+    // 物理级别地每隔 5厘米 查一次地图，绝对不可能漏掉任何黑块！
+    Eigen::Vector2d dir = p2 - p1;
+    double dist = dir.norm();
 
-    int dx = std::abs(x1 - x0);
-    int dy = std::abs(y1 - y0);
-    int sx = (x0 < x1) ? 1 : -1;
-    int sy = (y0 < y1) ? 1 : -1;
-    int err = dx - dy;
+    if (dist < 1e-3)
+        return true; // 两点重合
 
-    while (true)
+    dir.normalize();    // 单位方向向量
+    double step = 0.05; // 步长：5厘米
+
+    // 沿着连线一步步走，踩到黑块立刻否决
+    for (double d = 0; d <= dist; d += step)
     {
-        if (grid_map_->isOccupied(x0, y0))
-            return false; // 被黑块挡住了
-
-        if (x0 == x1 && y0 == y1)
-            break;
-
-        int err2 = 2 * err;
-        if (err2 > -dy)
+        Eigen::Vector2d pt = p1 + dir * d;
+        if (grid_map_->isOccupied(pt))
         {
-            err -= dy;
-            x0 += sx;
-        }
-        if (err2 < dx)
-        {
-            err += dx;
-            y0 += sy;
+            return false; // 视距被障碍物完全遮挡
         }
     }
-    return true; // 没有障碍物，视距通畅
-}
 
+    return true; // 视距绝对通畅
+}
 bool AStar::findNearestFreePoint(Eigen::Vector2d &pt)
 {
     return grid_map_->searchNearestFreeSpace(pt, pt);

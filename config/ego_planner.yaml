@@ -1,53 +1,44 @@
-# 无人机规划器 - 栅格地图全参数配置
+# ==========================================
+# 1. 任务指挥官配置
+# ==========================================
+mission:
+  takeoff_height: 1.2
+  wp_recognition:[4.0, 0.0]
+  wp_airdrop:[4.0, -3.5]
+  wp_strike: [0.0, -3.5]
+
+# ==========================================
+# 2. 测绘部 (GridMap) 配置
+# ==========================================
 planner:
-  # 地图基础配置
   map_resolution: 0.1
   map_width_m: 20.0
   map_height_m: 20.0
   map_origin_x: -5.0
   map_origin_y: -10.0
-
-  # 地图衰减/更新速率
-  map_decay_rate: 5
-
-  # 局部地图视野范围配置
   map_front_x: 5.3
   map_back_x: -0.5
   map_left_y: 1.0
   map_right_y: -7.5
-
-  # 地图膨胀/指数系数
   map_exp: 0.2
-
-  # 障碍物强度阈值
   map_intensity_threshold: 10.0
 
-  # 无人机B样条轨迹优化器参数配置
-bspline_optimizer:
-  # 平滑性权重（轨迹越丝滑，值越大）
-  weight_smooth: 1.0
-  # 避障碰撞权重（越重视避障，值越大）
-  weight_collision: 2.0
-  # 动力学可行性权重（速度/加速度约束）
-  weight_feasibility: 1.0
-
-  # 无人机最大速度限制 (m/s)
+# ==========================================
+# 3. 调度部 (Manager) 配置
+# ==========================================
+manager:
   max_vel: 1.0
-  # 无人机最大加速度限制 (m/s²)
   max_acc: 1.0
+  ctrl_pt_dist: 0.3    # B样条控制点间距
 
-  # 避障安全距离 (米)，无人机与障碍物的最小距离
-  safe_distance: 0.5
-
-  # 优化最大迭代次数
+# ==========================================
+# 4. 优化部 (L-BFGS Optimizer) 配置
+# ==========================================
+bspline_optimizer:
+  weight_smooth: 1.0       # 越高轨迹越直
+  weight_collision: 2.0    # 越高越怕撞墙
+  weight_feasibility: 1.0
+  safe_distance: 0.5       # 避障安全/膨胀距离 (非常关键)
+  max_vel: 1.0
+  max_acc: 1.0
   max_iteration_num: 300
-
-  # 规划管理器参数
-max_vel: 1.0
-max_acc: 1.0
-ctrl_pt_dist: 0.1
-
-mission:
-  wp_recognition: [4.0, 0.0]
-  wp_airdrop: [4.0, -3.5]
-  wp_strike: [0.0, -3.5]

@@ -128,22 +128,31 @@ void BsplineOptimizer::calcSmoothnessCost(const Eigen::MatrixXd &q, double &cost
 
 void BsplineOptimizer::calcCollisionCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
 {
-    Eigen::Vector2d grad_dir;
-    double dist;
+    cost = 0.0;
+    gradient.setZero();
+
+    Eigen::Vector2d grad_dir; // 从控制点指向安全区的逃生向量
+    double dist;              // 陷入深度
+
     for (int i = 0; i < pt_num_; ++i)
     {
         if (grid_map_->getObstacleGradient(q.col(i), grad_dir, dist))
         {
+            // 安全膨胀区判定
             if (dist < param_.safe_distance)
             {
+                // [物理引擎修复] 陷入越深，惩罚越大
                 double penalty = param_.safe_distance - dist;
                 cost += param_.weight_collision * penalty * penalty;
+
+                // [数学修复] 梯度 (导数) 必须是指向外部！
+                // 因为 L-BFGS 是“减去”梯度来最小化代价，我们要让点往外跑
+                // 所以我们把指向安全白格子的 grad_dir 乘上负数赋值给梯度。
                 gradient.col(i) += -2.0 * param_.weight_collision * penalty * grad_dir;
             }
         }
     }
 }
-
 void BsplineOptimizer::calcFeasibilityCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
 {
     for (int i = 0; i < pt_num_ - 1; i++)

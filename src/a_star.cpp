@@ -210,28 +210,22 @@ void AStar::simplifyPath(const std::vector<Eigen::Vector2d> &raw_path, std::vect
 
 bool AStar::checkLineOfSight(const Eigen::Vector2d &p1, const Eigen::Vector2d &p2)
 {
-    //[终极修复] 步进射线法 (Raycasting) 替代 Bresenham
-    // 物理级别地每隔 5厘米 查一次地图，绝对不可能漏掉任何黑块！
     Eigen::Vector2d dir = p2 - p1;
     double dist = dir.norm();
-
     if (dist < 1e-3)
-        return true; // 两点重合
+        return true;
 
-    dir.normalize();    // 单位方向向量
-    double step = 0.05; // 步长：5厘米
+    dir.normalize();
+    //[核心修复] 步长设为栅格的一半 (0.05m)，确保激光射线密集扫过，不漏过任何黑边！
+    double step = 0.05;
 
-    // 沿着连线一步步走，踩到黑块立刻否决
     for (double d = 0; d <= dist; d += step)
     {
         Eigen::Vector2d pt = p1 + dir * d;
         if (grid_map_->isOccupied(pt))
-        {
-            return false; // 视距被障碍物完全遮挡
-        }
+            return false;
     }
-
-    return true; // 视距绝对通畅
+    return true;
 }
 bool AStar::findNearestFreePoint(Eigen::Vector2d &pt)
 {

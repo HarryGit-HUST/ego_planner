@@ -114,27 +114,47 @@ void GridMap::buildStaticWalls(double start_x, double start_y)
 
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
 {
-    // 1. 瞬间擦除地图上所有的动态障碍物 (只保留静态墙 1000)
     for (size_t i = 0; i < occupancy_buffer_.size(); ++i)
     {
         if (occupancy_buffer_[i] < 1000)
-        {
             occupancy_buffer_[i] = 0;
-        }
     }
 
-    // 2. 接收新的点云 (使用 PointXYZ 而非 PointXYZI，避免 intensity 字段缺失问题)
-    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::PointCloud<pcl::PointXYZI> cloud;
     pcl::fromROSMsg(*msg, cloud);
+
+    // [核心修复] 将点云向外膨胀 safe_distance！构建真正的配置空间 (C-Space)
+    // 假设 YAML 里 safe_distance 是 0.5，resolution 是 0.1，那么就向外膨胀 5 个格子
+    int inf_cells = std::ceil(param_.safe_distance / param_.resolution);
+    int inf_sq = inf_cells * inf_cells;
 
     for (const auto &pt : cloud.points)
     {
-        int gx, gy;
-        if (!posToIndex(Eigen::Vector2d(pt.x, pt.y), gx, gy))
+        if (pt.intensity <= param_.intensity_threshold)
+            continue;
+        int cx, cy;
+        if (!posToIndex(Eigen::Vector2d(pt.x, pt.y), cx, cy))
             continue;
 
-        // 直接将所有点视为障碍物
-        occupancy_buffer_[gx + gy * grid_w_] = std::max(occupancy_buffer_[gx + gy * grid_w_], 999);
+        // 向四周膨胀
+        for (int dx = -inf_cells; dx <= inf_cells; ++dx)
+        {
+            for (int dy = -inf_cells; dy <= inf_cells; ++dy)
+            {
+                if (dx * dx + dy * dy <= inf_sq)
+                {
+                    int nx = cx + dx, ny = cy + dy;
+                    if (nx >= 0 && nx < grid_w_ && ny >= 0 && ny < grid_h_)
+                    {
+                        if (occupancy_buffer_[nx + ny * grid_w_] != 1000)
+                        {
+                            // 标记为 999 (膨胀后的危险区)
+                            occupancy_buffer_[nx + ny * grid_w_] = 999;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

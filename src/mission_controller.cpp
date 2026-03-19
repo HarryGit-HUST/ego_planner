@@ -52,58 +52,7 @@ void MissionController::init(ros::NodeHandle &nh)
     ROS_INFO("[Boss] 任务指挥官已就绪！各项比赛参数读取无误。");
 }
 
-// ============================================================================
-// [史诗级修复] 异步无阻塞规划 (Asynchronous Non-blocking Planning)
-// 彻底解决 L-BFGS 算力波峰导致的 PX4 心跳超时坠机问题！
-// ============================================================================
-bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
-{
-    Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
-    double dist_to_goal = (curr_xy - target_xy).norm();
 
-    if (dist_to_goal < 0.2)
-        return true;
-
-    // 监控输出：当前飞行信息
-    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 高度: %.2fm", dist_to_goal, current_pos_.z());
-
-    bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
-
-    if (need_replan)
-    {
-        if (!is_planning_.load())
-        {
-            is_planning_.store(true);
-            has_global_plan_ = false;
-
-            ROS_WARN("[Boss] 🚨 触发重规划！启动后台子线程计算 A* 和 L-BFGS...");
-
-            std::thread([this, curr_xy, target_xy]()
-                        {
-                ROS_INFO("[子线程] 🌐 线程 %zu 开始寻路计算...", std::hash<std::thread::id>{}(std::this_thread::get_id()));
-                
-                bool success = planner_manager_->replan(curr_xy, target_xy);
-                
-                has_global_plan_ = success;
-                is_planning_.store(false); 
-                
-                if(success) ROS_INFO("[子线程] ✅ 轨迹生成完毕，通知主线程接管！");
-                else ROS_ERROR("[子线程] ❌ 规划彻底失败！"); })
-                .detach();
-        }
-
-        // 主线程维持飞控心跳
-        ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 维持原地悬停指令");
-        publishSetpoint(curr_xy, param_.takeoff_height, init_yaw_);
-        return false;
-    }
-
-    double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
-    Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
-    publishSetpoint(cmd_pos, param_.takeoff_height, init_yaw_);
-
-    return false;
-}
 void MissionController::tick()
 {
     if (!is_connected_)
@@ -129,7 +78,7 @@ void MissionController::tick()
         break;
 
     case MissionState::TAKEOFF:
-        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), param_.takeoff_height, init_yaw_);
+        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + param_.takeoff_height, init_yaw_);
         if (std::abs(current_pos_.z() - param_.takeoff_height) < 0.15)
         {
 
@@ -149,7 +98,7 @@ void MissionController::tick()
     // 彻底杜绝 A* 趁着地图是空的，画出一条直线直接撞墙的 Bug！
     // ==========================================================
     case MissionState::WAIT_FOR_MAP:
-        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), param_.takeoff_height, init_yaw_);
+        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + param_.takeoff_height, init_yaw_);
 
         if ((ros::Time::now() - map_wait_start_time_).toSec() > 2.0)
         {
@@ -169,7 +118,7 @@ void MissionController::tick()
         break;
 
     case MissionState::HOVER_RECOGNIZE:
-        publishSetpoint(param_.wp_recog, param_.takeoff_height, init_yaw_);
+        publishSetpoint(param_.wp_recog, Eigen::Vector2d(0, 0), init_pos_.z() + param_.takeoff_height, init_yaw_);
         if ((ros::Time::now() - hover_start_time_).toSec() > 3.0)
         {
             current_state_ = MissionState::NAV_AIRDROP_AREA;
@@ -188,7 +137,7 @@ void MissionController::tick()
         break;
 
     case MissionState::HOVER_AIRDROP:
-        publishSetpoint(param_.wp_airdrop, param_.takeoff_height, init_yaw_);
+        publishSetpoint(param_.wp_airdrop, Eigen::Vector2d(0, 0), init_pos_.z() + param_.takeoff_height, init_yaw_);
         if ((ros::Time::now() - hover_start_time_).toSec() > 3.0)
         {
             current_state_ = MissionState::NAV_STRIKE_AREA;
@@ -207,7 +156,7 @@ void MissionController::tick()
         break;
 
     case MissionState::LASER_STRIKE:
-        publishSetpoint(param_.wp_strike, param_.takeoff_height, init_yaw_);
+        publishSetpoint(param_.wp_strike, Eigen::Vector2d(0, 0), init_pos_.z() + param_.takeoff_height, init_yaw_);
         if ((ros::Time::now() - hover_start_time_).toSec() > 2.0)
         {
             current_state_ = MissionState::RETURN_TO_LAUNCH;
@@ -225,7 +174,7 @@ void MissionController::tick()
         break;
 
     case MissionState::LANDING:
-        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), current_pos_.z() - 0.2, init_yaw_);
+        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + current_pos_.z() - 0.2, init_yaw_);
         if (current_pos_.z() < init_pos_.z() + 0.1)
         {
             current_state_ = MissionState::FINISHED;
@@ -234,7 +183,7 @@ void MissionController::tick()
         break;
 
     case MissionState::FINISHED:
-        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), 0.0, init_yaw_);
+        publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + 0.0, init_yaw_);
         break;
     }
     // ==========================================================
@@ -250,17 +199,80 @@ void MissionController::tick()
     }
 }
 
-// ... 下面是 publishSetpoint 和 setOffboardAndArm 辅助函数，保持你原来的不动 ...
-void MissionController::publishSetpoint(const Eigen::Vector2d &xy, double z, double yaw)
+// [史诗级修复] 引入前馈速度控制，并修正高度坐标基准
+void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::Vector2d &vel_xy, double z, double yaw)
 {
     mavros_msgs::PositionTarget msg;
     msg.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
-    msg.type_mask = 0b101111111000;
+
+    // 掩码魔法：启用 Pos X/Y/Z (0,1,2), Vel X/Y (3,4), Yaw (10)
+    // 忽略 Vel Z(5), Acc(6,7,8), Force(9), YawRate(11)
+    // 对应的二进制: 0b10 1111 100 000 = 3040
+    msg.type_mask = 3040;
+
     msg.position.x = xy.x();
     msg.position.y = xy.y();
-    msg.position.z = z;
+    msg.position.z = z; // 绝对高度 Z
+
+    msg.velocity.x = vel_xy.x(); // 前馈速度 X
+    msg.velocity.y = vel_xy.y(); // 前馈速度 Y
+    msg.velocity.z = 0;
+
     msg.yaw = yaw;
     setpoint_pub_.publish(msg);
+}
+
+bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
+{
+    Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
+    double dist_to_goal = (curr_xy - target_xy).norm();
+
+    if (dist_to_goal < 0.2)
+        return true;
+
+    // 监控输出
+    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f", dist_to_goal, current_pos_.z());
+
+    bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
+
+    // 绝对高度必须加上 init_pos_.z() ！！！
+    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
+
+    if (need_replan)
+    {
+        if (!is_planning_.load())
+        {
+            is_planning_.store(true);
+            has_global_plan_ = false;
+
+            ROS_WARN_THROTTLE(1.0, "[Boss] 🚨 触发重规划！启动后台子线程计算...");
+
+            Eigen::Vector2d start_pt = curr_xy;
+            Eigen::Vector2d end_pt = target_xy;
+
+            std::thread([this, start_pt, end_pt]()
+                        {
+                            ROS_INFO("[子线程] 🌐 线程 %zu 开始寻路计算...", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+                bool success = planner_manager_->replan(start_pt, end_pt);
+                has_global_plan_ = success;
+                is_planning_.store(false); })
+                .detach();
+        }
+        ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 维持原地悬停指令");
+        // 主线程保命心跳：原地悬停，速度给 0
+        publishSetpoint(curr_xy, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
+        return false;
+    }
+
+    // 正常循迹：同时索要【位置】和【速度】
+    double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
+    Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
+    Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
+
+    // 发送带有前馈速度的完美控制指令！
+    publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
+
+    return false;
 }
 
 bool MissionController::setOffboardAndArm()

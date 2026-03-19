@@ -84,7 +84,8 @@ private:
     bool setOffboardAndArm();
 
     bool flyToXY(const Eigen::Vector2d &target_xy);
-    void publishSetpoint(const Eigen::Vector2d &xy, double z, double yaw);
+    // 增加速度向量 vel_xy
+    void publishSetpoint(const Eigen::Vector2d &xy, const Eigen::Vector2d &vel_xy, double z, double yaw);
 };
 
 #endif // MISSION_CONTROLLER_H

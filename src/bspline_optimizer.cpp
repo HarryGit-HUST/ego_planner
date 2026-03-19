@@ -30,9 +30,13 @@ double BsplineOptimizer::costFunction(void *instance, const double *x, double *g
 {
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(instance);
     double cost;
-    Eigen::Map<const Eigen::MatrixXd> q_free(x, 2, n / 2);
-    Eigen::Map<Eigen::MatrixXd> g_free(grad, 2, n / 2);
+    Eigen::Map<const Eigen::MatrixXd> q_free_map(x, 2, n / 2);
+    Eigen::MatrixXd q_free = q_free_map;  // 创建副本以绑定到非 const 引用
+    Eigen::MatrixXd g_free = Eigen::MatrixXd::Zero(2, n / 2);  // 局部变量接收梯度
     opt->combineCost(q_free, cost, g_free);
+    // 将结果复制回 grad 数组
+    Eigen::Map<Eigen::MatrixXd> grad_map(grad, 2, n / 2);
+    grad_map = g_free;
     return cost;
 }
 

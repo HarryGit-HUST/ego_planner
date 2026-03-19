@@ -1,6 +1,7 @@
 #include "mission_controller.h"
 #include "ego_planner_manager.h"
 #include <cmath>
+#include <functional>
 #include <tf/transform_datatypes.h>
 
 MissionController::MissionController()
@@ -79,7 +80,7 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 
             std::thread([this, curr_xy, target_xy]()
                         {
-                ROS_INFO("[子线程] 🌐 线程 %p 开始寻路计算...", std::this_thread::get_id());
+                ROS_INFO("[子线程] 🌐 线程 %zu 开始寻路计算...", std::hash<std::thread::id>{}(std::this_thread::get_id()));
                 
                 bool success = planner_manager_->replan(curr_xy, target_xy);
                 

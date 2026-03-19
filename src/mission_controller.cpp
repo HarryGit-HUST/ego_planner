@@ -61,50 +61,48 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
     double dist_to_goal = (curr_xy - target_xy).norm();
 
     if (dist_to_goal < 0.2)
-        return true; // 已到达
+        return true;
 
-    // 检查是否需要规划 (没有轨迹，或轨迹前方撞墙了)
+    // 监控输出：当前飞行信息
+    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 高度: %.2fm", dist_to_goal, current_pos_.z());
+
     bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
 
     if (need_replan)
     {
-        // 如果当前没有正在规划的子线程，我们就开一个！
         if (!is_planning_.load())
         {
             is_planning_.store(true);
-            has_global_plan_ = false; // 规划期间废弃旧轨迹
-            ROS_WARN_THROTTLE(1.0, "[Boss] 触发异步避障规划...");
+            has_global_plan_ = false;
 
-            // 拷贝一份当前坐标传给子线程，防止线程竞争
-            Eigen::Vector2d start_pt = curr_xy;
-            Eigen::Vector2d end_pt = target_xy;
+            ROS_WARN("[Boss] 🚨 触发重规划！启动后台子线程计算 A* 和 L-BFGS...");
 
-            // 🔥 开启脱离的后台子线程算数学！
-            std::thread([this, start_pt, end_pt]()
+            std::thread([this, curr_xy, target_xy]()
                         {
-                            bool success = planner_manager_->replan(start_pt, end_pt);
-                            // 算完后，更新全局标志位
-                            has_global_plan_ = success;
-                            is_planning_.store(false); // 摘牌子，子线程结束
-                        })
+                ROS_INFO("[子线程] 🌐 线程 %p 开始寻路计算...", std::this_thread::get_id());
+                
+                bool success = planner_manager_->replan(curr_xy, target_xy);
+                
+                has_global_plan_ = success;
+                is_planning_.store(false); 
+                
+                if(success) ROS_INFO("[子线程] ✅ 轨迹生成完毕，通知主线程接管！");
+                else ROS_ERROR("[子线程] ❌ 规划彻底失败！"); })
                 .detach();
         }
 
-        // 🚨 主线程绝对不等待！立刻发送原地悬停指令，保住飞控 20Hz 心跳！
+        // 主线程维持飞控心跳
+        ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 维持原地悬停指令");
         publishSetpoint(curr_xy, param_.takeoff_height, init_yaw_);
         return false;
     }
 
-    // 走到这里，说明 has_global_plan_ == true 且 is_planning_ == false
-    // 正常循迹
     double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
     Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
-
-    // 发送给飞控
     publishSetpoint(cmd_pos, param_.takeoff_height, init_yaw_);
+
     return false;
 }
-
 void MissionController::tick()
 {
     if (!is_connected_)
@@ -237,6 +235,17 @@ void MissionController::tick()
     case MissionState::FINISHED:
         publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), 0.0, init_yaw_);
         break;
+    }
+    // ==========================================================
+    // [新增] 5Hz 频率刷新 RViz，让你一眼看穿所有 Bug！
+    // ==========================================================
+    static int viz_count = 0;
+    if (++viz_count % 4 == 0)
+    {
+        if (planner_manager_)
+        {
+            planner_manager_->publishVisualization();
+        }
     }
 }
 

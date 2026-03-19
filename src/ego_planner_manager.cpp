@@ -29,76 +29,83 @@ void PlannerManager::init(ros::NodeHandle &nh)
     // 1. 在 init 函数末尾加上：
     astar_pub_ = nh.advertise<nav_msgs::Path>("/viz/astar_path", 1);
     bspline_pub_ = nh.advertise<visualization_msgs::Marker>("/viz/bspline_traj", 1);
+    ROS_INFO("[CEO] 规划总局初始化完成.");
 }
+
 bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector2d &target_pt)
 {
-    // TODO 1: 让 A* 出马，寻找路径
+    ROS_INFO("[CEO] 收到规划指令: 起点(%.2f, %.2f) -> 终点(%.2f, %.2f)",
+             start_pt.x(), start_pt.y(), target_pt.x(), target_pt.y());
+
     std::vector<Eigen::Vector2d> astar_path;
     if (!a_star_->search(start_pt, target_pt, astar_path))
     {
-        ROS_WARN("[CEO] A* 寻路失败！前方完全封闭！");
-        return false; // 死胡同
+        ROS_WARN("[CEO] A* 寻路失败！无法到达终点！");
+        return false;
     }
-    last_astar_path_ = astar_path; // 【新增】保存折线用于画图
 
-    //[核心修复 1] 正确计算 B样条的时间间隔 ts
-    // 计算 A* 路径总长度
+    last_astar_path_ = astar_path; // 留着画图用
+    ROS_INFO("[CEO] A* 寻路成功，节点数: %zu", astar_path.size());
+
     double total_len = 0.0;
     for (size_t i = 0; i < astar_path.size() - 1; ++i)
     {
         total_len += (astar_path[i + 1] - astar_path[i]).norm();
     }
-    // 假设以最高速度飞行，总时间 = 长度 / 速度
+
+    // [防 NaN 核心补丁] 如果起点离终点太近，强行保底！
+    if (total_len < 0.1)
+        total_len = 0.1;
+
     double total_time = total_len / param_.max_vel;
-    // 按照期望的空间间距划分控制点
     int num_segments = std::max(1, (int)(total_len / param_.ctrl_pt_dist));
     double ts = total_time / num_segments;
+
+    if (ts < 0.01)
+        ts = 0.05; // 绝对禁止 ts 为 0 导致 L-BFGS 除以零！
 
     Eigen::MatrixXd ctrl_pts;
     UniformBspline::parameterizeToBspline(ts, astar_path, std::vector<Eigen::Vector2d>(), ctrl_pts);
 
     if (!optimizer_->optimize(ctrl_pts, ts))
     {
-        ROS_WARN("[CEO] 轨迹优化失败！");
+        ROS_ERROR("[CEO] B样条轨迹优化崩溃！");
         return false;
     }
 
-    // TODO 4: 把优化好的控制点封装成 B样条轨迹档案
-    local_traj_.setUniformBspline(ctrl_pts, 3, 0.1);
+    local_traj_.setUniformBspline(ctrl_pts, 3, ts);
 
-    // TODO 5: 动力学时间重分配
     double ratio;
-    if (!local_traj_.checkFeasibility(ratio))
+    if (!local_traj_.checkFeasibility(ratio, false))
     {
+        ROS_WARN("[CEO] 轨迹超速，正在进行动力学时间拉长...");
         local_traj_.lengthenTime(ratio);
     }
 
-    // 盖上时间戳，归档入库！
     traj_start_time_ = ros::Time::now();
-    ROS_INFO("[CEO] 轨迹生成成功！耗时极短。");
+    ROS_INFO("[CEO] ✅ 全局轨迹生成成功并归档！");
     return true;
 }
 
 Eigen::Vector2d PlannerManager::getPosition(double t_sec)
 {
-    // TODO: 从 local_traj_ 里调用 evaluateDeBoor(t_sec) 并返回
-    // 细节保护：如果 t_sec 超出了轨迹总时间，就返回轨迹的最后一个点
+    // [防越界保护]
+    if (local_traj_.getControlPoints().cols() == 0)
+        return Eigen::Vector2d(0, 0);
+
     double t_sum = local_traj_.getTimeSum();
     if (t_sec > t_sum)
-    {
         return local_traj_.evaluateDeBoor(t_sum);
-    }
     else
-    {
         return local_traj_.evaluateDeBoor(t_sec);
-    }
 }
 Eigen::Vector2d PlannerManager::getVelocity(double t_sec)
 {
-    if(t_sec > local_traj_.getTimeSum())
-    {
-        return Eigen::Vector2d(0, 0); // 轨迹结束后速度为零
-    }
+    if (local_traj_.getControlPoints().cols() == 0)
+        return Eigen::Vector2d(0, 0);
+    double t_sum = local_traj_.getTimeSum();
+    if (t_sec > t_sum)
+        return Eigen::Vector2d(0, 0);
     else
     {
         UniformBspline derivative_traj = local_traj_.getDerivative();
@@ -107,15 +114,15 @@ Eigen::Vector2d PlannerManager::getVelocity(double t_sec)
 }
 bool PlannerManager::checkCollision()
 {
+    if (local_traj_.getControlPoints().cols() == 0)
+        return false;
     double duration = local_traj_.getTimeSum();
-    // [核心修复 2] CEO 沿着自己生成的轨迹抽样检查，看看有没有撞墙
-    // 每隔 0.1 秒踩个点，去问地图：前面堵了没？
     for (double t = 0.0; t <= duration; t += 0.1)
     {
         Eigen::Vector2d pt = local_traj_.evaluateDeBoor(t);
         if (grid_map_->isOccupied(pt))
         {
-            ROS_WARN_THROTTLE(1.0, "[CEO 警报] 前方出现新障碍物！请求重新规划！");
+            ROS_WARN_THROTTLE(1.0, "[CEO 警报] 现存轨迹前方出现障碍物！触发重规划！");
             return true;
         }
     }
@@ -133,11 +140,10 @@ void PlannerManager::buildWalls(double start_x, double start_y)
 
 void PlannerManager::publishVisualization()
 {
-    // 1. 使唤测绘部发二维地图
     if (grid_map_)
         grid_map_->publishMap();
 
-    // 2. 发送 A* 蓝色折线
+    // 发布 A* 蓝线
     if (!last_astar_path_.empty())
     {
         nav_msgs::Path msg;
@@ -148,16 +154,14 @@ void PlannerManager::publishVisualization()
             geometry_msgs::PoseStamped ps;
             ps.pose.position.x = p.x();
             ps.pose.position.y = p.y();
-            ps.pose.position.z = 1.0; // 悬浮在Z=1处，防止被地图遮挡
+            ps.pose.position.z = 1.0;
             ps.pose.orientation.w = 1.0;
             msg.poses.push_back(ps);
         }
         astar_pub_.publish(msg);
     }
 
-    // 3. 发送 B 样条绿色圆球平滑轨迹
-    // [修复] 检查控制点是否有效，防止空轨迹导致段错误
-
+    // 发布 B 样条绿球
     if (local_traj_.getControlPoints().cols() > 0 && local_traj_.getTimeSum() > 0.0)
     {
         visualization_msgs::Marker msg;
@@ -167,16 +171,15 @@ void PlannerManager::publishVisualization()
         msg.id = 0;
         msg.type = visualization_msgs::Marker::SPHERE_LIST;
         msg.action = visualization_msgs::Marker::ADD;
-        msg.scale.x = 0.1;
-        msg.scale.y = 0.1;
-        msg.scale.z = 0.1;
+        msg.scale.x = 0.15;
+        msg.scale.y = 0.15;
+        msg.scale.z = 0.15;
         msg.color.a = 1.0;
         msg.color.r = 0.0;
         msg.color.g = 1.0;
-        msg.color.b = 0.0; // 绿色
+        msg.color.b = 0.0;
 
         double t_sum = local_traj_.getTimeSum();
-        // 每隔 0.05 秒抽样一个点画个绿球
         for (double t = 0; t <= t_sum; t += 0.05)
         {
             Eigen::Vector2d pt = local_traj_.evaluateDeBoor(t);

@@ -198,33 +198,35 @@ bool GridMap::searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d 
 // 🧱 积木四：ESDF-Free 灵魂 —— 计算排斥梯度
 bool GridMap::getObstacleGradient(const Eigen::Vector2d &pt, Eigen::Vector2d &grad, double &penetration_depth) const
 {
+    // 如果在白格子，安全！
     if (!isOccupied(pt))
         return false;
 
     Eigen::Vector2d free_pt;
     if (!searchNearestFreeSpace(pt, free_pt))
     {
-        grad = Eigen::Vector2d::Zero();
-        penetration_depth = 0;
+        //[核心修复] 找不到逃生点时，绝不给 Random！给一个固定的向量，防止 L-BFGS 崩溃。
+        grad = Eigen::Vector2d(1.0, 0.0);
+        penetration_depth = 2.0; // 假装陷得极深
         return true;
     }
 
     Eigen::Vector2d dir = free_pt - pt;
-    double dist = dir.norm(); // [修复] 补充 double 声明
+    double dist = dir.norm();
 
     if (dist < 1e-4)
     {
-        grad = Eigen::Vector2d::Random().normalized();
-        penetration_depth = 0;
+        // [核心修复] 离边界极近时，固定逃生方向，绝不用 Random！
+        grad = Eigen::Vector2d(1.0, 0.0);
+        penetration_depth = 0.05; // 赋予一个微小的陷入深度
         return true;
     }
 
-    // [修复] 直接赋值，绝不能加前面的类型声明！
+    // 正确的逃生梯度：指向最近的安全白格子
     grad = dir / dist;
     penetration_depth = dist;
     return true;
 }
-
 int GridMap::getGridW() const
 {
     return grid_w_;

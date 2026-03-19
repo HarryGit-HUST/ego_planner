@@ -116,15 +116,17 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
         Eigen::Map<const Eigen::VectorXd>(q_free.data(), q_free.size());
 
     lbfgs_parameter_t lbfgs_params;
-    lbfgs_parameter_init(&lbfgs_params);
+    lbfgs_parameter_init(&lbfgs_params); // 先全部载入默认安全配置
+
     lbfgs_params.max_iterations = param_.max_iteration_num;
-    lbfgs_params.epsilon = 1e-4;
     lbfgs_params.past = 3;
-    lbfgs_params.delta = 1e-6;  // 降低收敛阈值
-    lbfgs_params.max_step = 0.01;  // [核心修复] 进一步限制最大步长为 1cm
-    lbfgs_params.linesearch = LBFGS_LINESEARCH_BACKTRACKING_ARMIJO;
-    lbfgs_params.ftol = 1e-4;  // 更宽松的 Armijo 条件
-    lbfgs_params.wolfe = 0.9;  // Wolfe 条件
+    lbfgs_params.delta = 1e-5;
+
+    // 【删除这几行坑人的限制】
+    // lbfgs_params.max_step = 0.01;  <-- 这行必须删掉！就是它导致了 -999！
+    // lbfgs_params.linesearch = LBFGS_LINESEARCH_BACKTRACKING_ARMIJO; <-- 删掉，用默认
+    // lbfgs_params.ftol = 1e-4;  <-- 删掉
+    // lbfgs_params.wolfe = 0.9;  <-- 删掉
 
     double final_cost;
     ROS_INFO("[Optimizer] 启动 L-BFGS，自由点数：%d", free_num);
@@ -169,26 +171,24 @@ void BsplineOptimizer::calcCollisionCost(const Eigen::MatrixXd &q, double &cost,
     gradient.setZero();
 
     Eigen::Vector2d grad_dir;
-    double depth;
+    double depth; // 陷入障碍物的深度
 
     for (int i = 0; i < pt_num_; ++i)
     {
-        // 如果返回 true，说明控制点在障碍物内，depth 是到边界的距离
+        // 如果返回 true，说明点在地图的障碍物膨胀区内，depth 是陷入深度
         if (grid_map_->getObstacleGradient(q.col(i), grad_dir, depth))
         {
-            // 只有当距离小于安全距离时才有惩罚
-            double dist_to_bound = param_.safe_distance - depth;
-            if (dist_to_bound > 0)
-            {
-                // 代价 = 权重 * (安全距离 - 实际距离)^2
-                cost += param_.weight_collision * dist_to_bound * dist_to_bound;
-                // 梯度指向安全区域
-                gradient.col(i) += -2.0 * param_.weight_collision * dist_to_bound * grad_dir;
-            }
+            // [史诗级修复] 陷入越深，惩罚越大！还要加上额外的安全缓冲！
+            double penalty = depth + param_.safe_distance;
+
+            // 代价 = 权重 * (陷入深度 + 安全缓冲)^2
+            cost += param_.weight_collision * penalty * penalty;
+
+            // 梯度指向安全区域 (grad_dir)。为了让点顺着逃生方向走，降低 Cost，梯度带负号。
+            gradient.col(i) += -2.0 * param_.weight_collision * penalty * grad_dir;
         }
     }
 }
-
 
 void BsplineOptimizer::calcFeasibilityCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
 {

@@ -288,7 +288,7 @@ bool MissionController::setOffboardAndArm()
     if (!has_sent_setpoint)
     {
         // 先发送当前位置作为设定点
-        publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()),
+        publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()),Eigen::Vector2d(0, 0),
                         current_pos_.z(), current_yaw_);
         ROS_INFO_THROTTLE(0.5, "[setOffboardAndArm] 发送设定点以准备 OFFBOARD...");
 

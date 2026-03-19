@@ -22,6 +22,7 @@ planner:
   map_right_y: -7.5
   map_exp: 0.2
   map_intensity_threshold: 0.0
+  safe_distance: 0.2
 
 # ==========================================
 # 3. 调度部 (Manager) 配置

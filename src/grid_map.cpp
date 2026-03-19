@@ -26,6 +26,7 @@ void GridMap::init(ros::NodeHandle &nh)
     nh.param("planner/map_right_y", param_.right_y, -7.5f);
     nh.param("planner/map_exp", param_.exp, 0.2f);  
     nh.param("planner/map_intensity_threshold", param_.intensity_threshold, 10.0f);
+    nh.param("planner/map_safe_distance", param_.safe_distance, 0.2f);
 
     grid_w_ = std::ceil(param_.width_m / param_.resolution);
     grid_h_ = std::ceil(param_.height_m / param_.resolution);
@@ -120,7 +121,7 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
             occupancy_buffer_[i] = 0;
     }
 
-    pcl::PointCloud<pcl::PointXYZI> cloud;
+    pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
     // [核心修复] 将点云向外膨胀 safe_distance！构建真正的配置空间 (C-Space)
@@ -130,8 +131,6 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
 
     for (const auto &pt : cloud.points)
     {
-        if (pt.intensity <= param_.intensity_threshold)
-            continue;
         int cx, cy;
         if (!posToIndex(Eigen::Vector2d(pt.x, pt.y), cx, cy))
             continue;

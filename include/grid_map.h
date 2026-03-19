@@ -90,6 +90,7 @@ public:
             float right_y;
             float exp;
             float intensity_threshold; // [修复] 加上了分号！
+            float safe_distance;
         } param_;
 
     int grid_w_;

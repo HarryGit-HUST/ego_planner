@@ -37,9 +37,9 @@ manager:
 # ==========================================
 bspline_optimizer:
   weight_smooth: 1.0       # 越高轨迹越直
-  weight_collision: 2.0    # 越高越怕撞墙
-  weight_feasibility: 1.0
+  weight_collision: 10.0    # 越高越怕撞墙
+  weight_feasibility: 0.01  # [修复] 降低动力学权重，防止梯度爆炸
   safe_distance: 0.5       # 避障安全/膨胀距离 (非常关键)
-  max_vel: 1.0
-  max_acc: 1.0
+  max_vel: 2.0
+  max_acc: 2.0
   max_iteration_num: 300

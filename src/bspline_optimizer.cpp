@@ -65,6 +65,15 @@ void BsplineOptimizer::combineCost(const Eigen::MatrixXd &q_free, double &f_comb
 
     // 4. [核心修复] 过滤掉首尾固定的点，只把中间自由点的梯度传回给 L-BFGS
     g_free = gradient.block(0, 3, 2, q_free.cols());
+    
+    // [调试] 打印各项代价
+    static int call_count = 0;
+    if (call_count < 5) {  // 只打印前 5 次调用
+        ROS_INFO("[Optimizer] [Cost #%d] 总代价：%.2f = 平滑%.2f + 碰撞%.2f + 动力学%.2f", 
+                 call_count, f_combine, cost_smooth, cost_collision, cost_feasibility);
+        ROS_INFO("[Optimizer] [Grad #%d] 梯度范数：%.4f", call_count, g_free.norm());
+        call_count++;
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -83,7 +92,25 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
         return true;
     }
 
+    // ===================== 调试日志：打印所有控制点状态 =====================
+    ROS_INFO("[Optimizer] ========== 控制点调试信息 ==========");
+    ROS_INFO("[Optimizer] 控制点总数：%d, 自由点数：%d (索引 3 到 %d)", pt_num_, free_num, pt_num_-4);
+    ROS_INFO("[Optimizer] 固定起点：控制点 0,1,2 | 固定终点：控制点 %d,%d,%d", pt_num_-3, pt_num_-2, pt_num_-1);
+    for (int i = 0; i < pt_num_; ++i)
+    {
+        Eigen::Vector2d pt = ctrl_pts.col(i);
+        bool occupied = grid_map_->isOccupied(pt);
+        const char* status = occupied ? "障碍物❌" : "安全✓";
+        const char* type = (i < 3 || i >= pt_num_-3) ? "固定" : "自由";
+        ROS_INFO("[Optimizer] 控制点 %d [%s]: (%.3f, %.3f) -> %s", i, type, pt.x(), pt.y(), status);
+    }
+    ROS_INFO("[Optimizer] ======== 调试信息结束 ========");
+    // ========================================================================
+
+    // 提取自由控制点（索引 3 到 pt_num-4）
     Eigen::MatrixXd q_free = ctrl_pts.block(0, 3, 2, free_num);
+
+    // 将自由控制点转换为 L-BFGS 需要的向量格式
     std::vector<double> x_vec(q_free.size());
     Eigen::Map<Eigen::VectorXd>(x_vec.data(), q_free.size()) =
         Eigen::Map<const Eigen::VectorXd>(q_free.data(), q_free.size());
@@ -93,9 +120,14 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
     lbfgs_params.max_iterations = param_.max_iteration_num;
     lbfgs_params.epsilon = 1e-4;
     lbfgs_params.past = 3;
+    lbfgs_params.delta = 1e-6;  // 降低收敛阈值
+    lbfgs_params.max_step = 0.01;  // [核心修复] 进一步限制最大步长为 1cm
+    lbfgs_params.linesearch = LBFGS_LINESEARCH_BACKTRACKING_ARMIJO;
+    lbfgs_params.ftol = 1e-4;  // 更宽松的 Armijo 条件
+    lbfgs_params.wolfe = 0.9;  // Wolfe 条件
 
     double final_cost;
-    ROS_INFO("[Optimizer] 启动 L-BFGS，自由点数: %d，初始检测...", free_num);
+    ROS_INFO("[Optimizer] 启动 L-BFGS，自由点数：%d", free_num);
 
     int ret = lbfgs(
         x_vec.size(), x_vec.data(), &final_cost,
@@ -105,15 +137,16 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
     {
         Eigen::MatrixXd q_free_opt = Eigen::Map<const Eigen::MatrixXd>(x_vec.data(), 2, free_num);
         ctrl_pts.block(0, 3, 2, free_num) = q_free_opt;
-        ROS_INFO("[Optimizer] ✅ 优化成功! 最终代价: %.2f (迭代 %d 次)", final_cost, ret);
+        ROS_INFO("[Optimizer] ✅ 优化成功！最终代价：%.2f (迭代 %d 次)", final_cost, ret);
         return true;
     }
     else
     {
-        ROS_ERROR("[Optimizer] ❌ L-BFGS 失败! 错误码: %d (大概率初始点在墙内被锁死)", ret);
+        ROS_ERROR("[Optimizer] ❌ L-BFGS 失败！错误码：%d", ret);
         return false;
     }
 }
+
 // 你的数学公式完美保留，仅增加边界保护
 void BsplineOptimizer::calcSmoothnessCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
 {
@@ -135,46 +168,56 @@ void BsplineOptimizer::calcCollisionCost(const Eigen::MatrixXd &q, double &cost,
     cost = 0.0;
     gradient.setZero();
 
-    Eigen::Vector2d grad_dir; // 指向逃生方向的单位向量
-    double depth;             // 陷入黑块的深度
+    Eigen::Vector2d grad_dir;
+    double depth;
 
     for (int i = 0; i < pt_num_; ++i)
     {
-        // 如果返回 true，说明这个控制点已经插进墙里了！
+        // 如果返回 true，说明控制点在障碍物内，depth 是到边界的距离
         if (grid_map_->getObstacleGradient(q.col(i), grad_dir, depth))
         {
-            // [史诗级修复] 因为 depth 是陷入深度，陷得越深，惩罚必须越大！
-            // 我们加上 safe_distance，是要求它不仅要出来，还要离墙一定距离
-            double penalty = depth + param_.safe_distance;
-
-            // 代价 = 权重 * 惩罚的平方
-            cost += param_.weight_collision * penalty * penalty;
-
-            // 梯度微积分链式法则：
-            // 因为 grad_dir 是指向白格子的，顺着 grad_dir 走，depth 就会减小。
-            // 梯度下降是要“减去”梯度的。所以偏导数必须带有负号！
-            gradient.col(i) += -2.0 * param_.weight_collision * penalty * grad_dir;
+            // 只有当距离小于安全距离时才有惩罚
+            double dist_to_bound = param_.safe_distance - depth;
+            if (dist_to_bound > 0)
+            {
+                // 代价 = 权重 * (安全距离 - 实际距离)^2
+                cost += param_.weight_collision * dist_to_bound * dist_to_bound;
+                // 梯度指向安全区域
+                gradient.col(i) += -2.0 * param_.weight_collision * dist_to_bound * grad_dir;
+            }
         }
     }
 }
+
 
 void BsplineOptimizer::calcFeasibilityCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
 {
     if (bspline_interval_ < 1e-4)
         return; //[防 NaN 补丁]
+    
+    double max_speed_sq = param_.max_vel * param_.max_vel;
+    
     for (int i = 0; i < pt_num_ - 1; i++)
     {
+        // 速度 = 位移 / dt
         Eigen::Vector2d V = (q.col(i + 1) - q.col(i)) / bspline_interval_;
         double speed_sq = V.squaredNorm();
-        double max_speed_sq = param_.max_vel * param_.max_vel;
 
         if (speed_sq > max_speed_sq)
         {
+            // 代价 = 权重 * (速度平方超标量)^2
             double penalty = speed_sq - max_speed_sq;
             cost += param_.weight_feasibility * penalty * penalty;
-            Eigen::Vector2d grad_V = 4.0 * param_.weight_feasibility * penalty * V;
-            gradient.col(i) += -grad_V / bspline_interval_;
-            gradient.col(i + 1) += grad_V / bspline_interval_;
+            
+            // 梯度计算：
+            // cost = w * (v^2 - vmax^2)^2
+            // d(cost)/d(p_i) = 2 * w * (v^2 - vmax^2) * d(v^2)/d(p_i)
+            // d(v^2)/d(p_i) = 2 * v * d(v)/d(p_i) = 2 * v * (-1/dt)
+            // 所以：d(cost)/d(p_i) = -4 * w * penalty * V / dt
+            Eigen::Vector2d grad_term = 4.0 * param_.weight_feasibility * penalty * V / bspline_interval_;
+            gradient.col(i) += -grad_term;
+            gradient.col(i + 1) += grad_term;
         }
     }
 }
+

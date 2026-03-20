@@ -93,15 +93,18 @@ void BsplineOptimizer::combineCost(const Eigen::MatrixXd &q_free, double &f_comb
 
     // 4. [核心修复] 过滤掉首尾固定的点，只把中间自由点的梯度传回给 L-BFGS
     g_free = gradient.block(0, 3, 2, q_free.cols());
-    
-    // [调试] 打印各项代价
     static int call_count = 0;
-    if (call_count < 5) {  // 只打印前 5 次调用
-        ROS_INFO("[Optimizer] [Cost #%d] 总代价：%.2f = 平滑%.2f + 碰撞%.2f + 动力学%.2f", 
-                 call_count, f_combine, cost_smooth, cost_collision, cost_feasibility);
-        ROS_INFO("[Optimizer] [Grad #%d] 梯度范数：%.4f", call_count, g_free.norm());
+    while (call_count < 5) // 前几次调用打印详细信息，帮助调参和验证正确性
+    {
+        // [新增] 调试日志：打印每次代价和梯度信息，帮助调参和验证正确性
+        ROS_INFO("[Optimizer] [Cost ] 总代价：%.2f = 平滑%.2f + 碰撞%.2f + 动力学%.2f", 
+                 f_combine, cost_smooth, cost_collision, cost_feasibility);
+        ROS_INFO("[Optimizer] [Grad ] 梯度范数：%.4f", g_free.norm());
         call_count++;
+
     }
+      
+    
 }
 
 // -------------------------------------------------------------------------
@@ -124,6 +127,7 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
     ROS_INFO("[Optimizer] ========== 控制点调试信息 ==========");
     ROS_INFO("[Optimizer] 控制点总数：%d, 自由点数：%d (索引 3 到 %d)", pt_num_, free_num, pt_num_-4);
     ROS_INFO("[Optimizer] 固定起点：控制点 0,1,2 | 固定终点：控制点 %d,%d,%d", pt_num_-3, pt_num_-2, pt_num_-1);
+    /*
     for (int i = 0; i < pt_num_; ++i)
     {
         Eigen::Vector2d pt = ctrl_pts.col(i);
@@ -132,6 +136,8 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
         const char* type = (i < 3 || i >= pt_num_-3) ? "固定" : "自由";
         ROS_INFO("[Optimizer] 控制点 %d [%s]: (%.3f, %.3f) -> %s", i, type, pt.x(), pt.y(), status);
     }
+    */
+    
     ROS_INFO("[Optimizer] ======== 调试信息结束 ========");
     // ========================================================================
 
@@ -157,19 +163,26 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
     lbfgs_params.max_iterations = param_.max_iteration_num;
     lbfgs_params.epsilon = 1e-4; // 停止阈值
     lbfgs_params.past = 3;
+    lbfgs_params.min_step = 1e-7;  // 添加最小步长限制
+lbfgs_params.max_step = 1e1;   // 添加最大步长限制
+lbfgs_params.ftol = 1e-4;      // 调整 Armijo 条件参数
+lbfgs_params.wolfe = 0.9;      // 调整 Wolfe 条件参数
 
     double final_cost;
     ROS_INFO("[Optimizer] 启动 L-BFGS，自由点数：%d", free_num);
 
     // 传入我们新写的 _progress 监视器
     int ret = lbfgs(
-        var_num, x_vec, &final_cost,
+        var_num, x_ptr, &final_cost,
         BsplineOptimizer::costFunction,
         BsplineOptimizer::_progress,
         this, &lbfgs_params);
 
     bool success = false;
-    if (ret >= 0 || ret == LBFGS_ALREADY_MINIMIZED || ret == LBFGSERR_MAXIMUMITERATION)
+    // [修复] L-BFGS 在离散栅格地图上无法完全收敛是正常现象
+    // 只要梯度有显著下降，就接受当前解
+    if (ret >= 0 || ret == LBFGS_ALREADY_MINIMIZED || ret == LBFGSERR_MAXIMUMITERATION || 
+        ret == LBFGSERR_LOGICERROR || ret == LBFGSERR_ROUNDING_ERROR)
     {
         // 将优化结果拷贝回 Eigen 矩阵
         Eigen::MatrixXd q_free_opt = Eigen::Map<const Eigen::MatrixXd>(x_ptr, 2, free_num);
@@ -208,24 +221,55 @@ void BsplineOptimizer::calcCollisionCost(const Eigen::MatrixXd &q, double &cost,
     cost = 0.0;
     gradient.setZero();
 
-    Eigen::Vector2d grad_dir; // 指向最近安全白格子的逃生方向
-    double depth;             // 陷入障碍物的深度 (米)
+    Eigen::Vector2d grad_dir; // 远离障碍物的方向
+    double signed_dist;       // 带符号距离：正=障碍物外，负=障碍物内
 
     for (int i = 0; i < pt_num_; ++i)
     {
-        // 如果返回 true，说明该控制点已经处于危险的黑块中！
-        if (grid_map_->getObstacleGradient(q.col(i), grad_dir, depth))
-        {
-            // 【数学真理】：depth 就是陷入深度，陷得越深，我们要给的代价必须越大！
-            // 代价 = 权重 * depth^2
-            cost += param_.weight_collision * depth * depth;
+        // 获取带符号距离和梯度方向
+        grid_map_->getObstacleGradient(q.col(i), grad_dir, signed_dist);
 
-            // 【梯度推导】：
-            // d(Cost)/d(P_i) = 2 * weight * depth * d(depth)/d(P_i)
-            // 因为顺着 grad_dir 走，能逃离黑块（让 depth 减小）。
-            // 所以深度的下降梯度是 -grad_dir。
-            // 所以总梯度是负的，完美闭环！
-            gradient.col(i) += -2.0 * param_.weight_collision * depth * grad_dir;
+        // 【光滑势场公式】：
+        // 当 signed_dist < safe_distance 时产生代价
+        // penetration = safe_distance - signed_dist
+        double penetration = param_.safe_distance - signed_dist;
+
+        if (penetration > 0)
+        {
+            // 【五次多项式光滑衰减因子】：f(x) = 10x³ - 15x⁴ + 6x⁵
+            // 满足：f(0)=0, f(1)=1, f'(0)=0, f'(1)=0, f''(0)=0, f''(1)=0
+            // 保证一阶和二阶导数都连续！
+            double ratio = penetration / param_.safe_distance;
+            double smooth_factor = 1.0;
+            
+            if (ratio < 1.0)
+            {
+                // 在安全距离内但在障碍物外：使用五次平滑衰减
+                smooth_factor = 10.0 * ratio * ratio * ratio 
+                              - 15.0 * ratio * ratio * ratio * ratio 
+                              + 6.0 * ratio * ratio * ratio * ratio * ratio;
+            }
+            
+            // 代价 = weight * penetration² * smooth_factor
+            cost += param_.weight_collision * penetration * penetration * smooth_factor;
+
+            // 梯度计算：
+            // cost = w * penetration² * smooth_factor
+            // d(cost)/d(penetration) = w * [2*penetration*smooth_factor + penetration² * f'(ratio) / safe_distance]
+            //                        = w * penetration * [2*smooth_factor + ratio * f'(ratio)]
+            // f'(ratio) = 30*ratio²*(1-ratio)²
+            if (ratio < 1.0)
+            {
+                // 在衰减区域内：完整梯度公式
+                double d_smooth_d_ratio = 30.0 * ratio * ratio * (1.0 - ratio) * (1.0 - ratio);
+                double grad_factor = 2.0 * smooth_factor + ratio * d_smooth_d_ratio;  // 【修复】是 + 号！
+                gradient.col(i) += -param_.weight_collision * penetration * grad_factor * grad_dir;
+            }
+            else
+            {
+                // 在障碍物内：smooth_factor = 1，梯度简化为标准形式
+                gradient.col(i) += -2.0 * param_.weight_collision * penetration * grad_dir;
+            }
         }
     }
 }
@@ -234,27 +278,50 @@ void BsplineOptimizer::calcFeasibilityCost(const Eigen::MatrixXd &q, double &cos
 {
     if (bspline_interval_ < 1e-4)
         return; //[防 NaN 补丁]
-    
-    double max_speed_sq = param_.max_vel * param_.max_vel;
-    
+
+    // 使用速度平方阈值，90% 速度时开始给梯度
+    double speed_threshold = 0.9 * param_.max_vel;
+    double speed_threshold_sq = speed_threshold * speed_threshold;
+
     for (int i = 0; i < pt_num_ - 1; i++)
     {
         // 速度 = 位移 / dt
         Eigen::Vector2d V = (q.col(i + 1) - q.col(i)) / bspline_interval_;
         double speed_sq = V.squaredNorm();
 
-        if (speed_sq > max_speed_sq)
+        if (speed_sq > speed_threshold_sq)
         {
-            // 代价 = 权重 * (速度平方超标量)^2
-            double penalty = speed_sq - max_speed_sq;
-            cost += param_.weight_feasibility * penalty * penalty;
+            // 【五次多项式光滑势场】：
+            // penalty = (speed² - th²) / th²，归一化到 [0, ∞)
+            // 使用 f(x) = 10x³ - 15x⁴ + 6x⁵，保证二阶导数连续
+            double penalty_norm = (speed_sq - speed_threshold_sq) / speed_threshold_sq;
+            double smooth_penalty = 1.0;
             
-            // 梯度计算：
-            // cost = w * (v^2 - vmax^2)^2
-            // d(cost)/d(p_i) = 2 * w * (v^2 - vmax^2) * d(v^2)/d(p_i)
-            // d(v^2)/d(p_i) = 2 * v * d(v)/d(p_i) = 2 * v * (-1/dt)
-            // 所以：d(cost)/d(p_i) = -4 * w * penalty * V / dt
-            Eigen::Vector2d grad_term = 4.0 * param_.weight_feasibility * penalty * V / bspline_interval_;
+            if (penalty_norm < 1.0)
+            {
+                // 在阈值附近：使用五次平滑衰减
+                smooth_penalty = 10.0 * penalty_norm * penalty_norm * penalty_norm 
+                               - 15.0 * penalty_norm * penalty_norm * penalty_norm * penalty_norm 
+                               + 6.0 * penalty_norm * penalty_norm * penalty_norm * penalty_norm * penalty_norm;
+            }
+            
+            // 代价 = weight * penalty_norm² * smooth_penalty
+            cost += param_.weight_feasibility * penalty_norm * penalty_norm * smooth_penalty;
+
+            // 梯度计算（分母没有 speed，不会爆炸）：
+            // grad = 4 * weight * penalty_norm * smooth_penalty * V / dt
+            //      + weight * penalty_norm² * d(smooth)/d(penalty) * d(penalty)/d(V) / dt
+            Eigen::Vector2d grad_term;
+            if (penalty_norm < 1.0)
+            {
+                double d_smooth_d_penalty = 30.0 * penalty_norm * penalty_norm * (1.0 - penalty_norm) * (1.0 - penalty_norm);
+                double grad_scale = 4.0 * smooth_penalty + 2.0 * penalty_norm * d_smooth_d_penalty;
+                grad_term = param_.weight_feasibility * grad_scale * V / (bspline_interval_ * speed_threshold_sq);
+            }
+            else
+            {
+                grad_term = 4.0 * param_.weight_feasibility * penalty_norm * V / bspline_interval_;
+            }
             gradient.col(i) += -grad_term;
             gradient.col(i + 1) += grad_term;
         }

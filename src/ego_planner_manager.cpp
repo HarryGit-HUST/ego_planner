@@ -87,6 +87,9 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
 
     local_traj_.setUniformBspline(ctrl_pts, 3, ts);
 
+    // [核心修复] 设置动力学极限，否则 checkFeasibility 会除以零导致 NaN！
+    local_traj_.setPhysicalLimits(param_.max_vel, param_.max_acc);
+
     double ratio;
     if (!local_traj_.checkFeasibility(ratio, false))
     {

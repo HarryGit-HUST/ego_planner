@@ -227,6 +227,7 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 {
     Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
     double dist_to_goal = (curr_xy - target_xy).norm();
+    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
 
     if (dist_to_goal < 0.2)
         return true;
@@ -261,7 +262,7 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
         }
         ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 锁死在锚点 (%.2f, %.2f) 悬停", hover_pt.x(), hover_pt.y());
         // 【核心修复】必须发布固定的 hover_pt，让飞控 PID 产生强大的对抗拉力！
-        double absolute_target_z = init_pos_.z() + param_.takeoff_height;
+        
         publishSetpoint(hover_pt, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
         return false;
     }
@@ -272,7 +273,7 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
     Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
 
     // 发送带有前馈速度的完美控制指令！
-    publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
+    publishSetpoint(cmd_pos, cmd_vel,absolute_target_z, init_yaw_);
 
     return false;
 }

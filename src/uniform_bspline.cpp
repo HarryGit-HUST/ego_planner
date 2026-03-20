@@ -3,7 +3,16 @@
 #include <algorithm>
 #include <iostream>
 
-UniformBspline::UniformBspline() {}
+UniformBspline::UniformBspline()
+{
+    // [核心修复] 初始化动力学极限为默认值，防止除以零导致 NaN
+    limit_vel_ = 1.0;
+    limit_acc_ = 1.0;
+    p_ = 3;
+    n_ = 0;
+    m_ = 0;
+    interval_ = 0.1;
+}
 
 UniformBspline::UniformBspline(const Eigen::MatrixXd &points, int order, double interval)
 {
@@ -19,6 +28,11 @@ void UniformBspline::setUniformBspline(const Eigen::MatrixXd &points, int order,
     interval_ = interval;
     n_ = control_points_.cols() - 1;
     m_ = n_ + p_ + 1;
+    
+    // [核心修复] 确保动力学极限被初始化，防止 NaN
+    if (limit_vel_ <= 0) limit_vel_ = 1.0;
+    if (limit_acc_ <= 0) limit_acc_ = 1.0;
+    
     buildKnotVector();
 }
 
@@ -85,6 +99,10 @@ bool UniformBspline::checkFeasibility(double &ratio, bool show_info) const
         double vel_ratio = max_vel / limit_vel_;
         double acc_ratio = max_acc / limit_acc_;
         ratio = std::max(vel_ratio, acc_ratio);
+        
+        // [防御性编程] 限制 ratio 的范围，防止过大导致数值不稳定
+        ratio = std::max(1.0, std::min(ratio, 10.0));
+        
         if (show_info)
         {
             std::cout << "  ❌ 轨迹超载！需要将时间拉长 " << ratio << " 倍！" << std::endl;

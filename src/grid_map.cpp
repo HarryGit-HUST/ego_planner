@@ -214,37 +214,120 @@ bool GridMap::searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d 
     return false; // 没找到逃生点
 }
 
-// 🧱 积木四：ESDF-Free 灵魂 —— 计算排斥梯度
+// 🧱 积木四：ESDF-Free 灵魂 —— 计算排斥梯度（连续势场版）
+// 返回值：true = 在障碍物内，false = 在障碍物外
+// penetration_depth: 正值表示在障碍物外的距离，负值表示在障碍物内的深度
+// grad: 始终指向远离障碍物的方向（逃生方向）
 bool GridMap::getObstacleGradient(const Eigen::Vector2d &pt, Eigen::Vector2d &grad, double &penetration_depth) const
 {
-    // 如果在白格子，安全！
-    if (!isOccupied(pt))
+    int cx, cy;
+    if (!posToIndex(pt, cx, cy))
+    {
+        // 越界处理
+        grad = Eigen::Vector2d(1.0, 0.0);
+        penetration_depth = param_.safe_distance;
         return false;
-
-    Eigen::Vector2d free_pt;
-    if (!searchNearestFreeSpace(pt, free_pt))
-    {
-        //[核心修复] 找不到逃生点时，绝不给 Random！给一个固定的向量，防止 L-BFGS 崩溃。
-        grad = Eigen::Vector2d(1.0, 0.0);
-        penetration_depth = 2.0; // 假装陷得极深
-        return true;
     }
 
-    Eigen::Vector2d dir = free_pt - pt;
-    double dist = dir.norm();
-
-    if (dist < 1e-4)
+    if (isOccupied(pt))
     {
-        // [核心修复] 离边界极近时，固定逃生方向，绝不用 Random！
-        grad = Eigen::Vector2d(1.0, 0.0);
-        penetration_depth = 0.05; // 赋予一个微小的陷入深度
+        // ========== 情况 1: 在障碍物内部，寻找最近的自由空间 ==========
+        Eigen::Vector2d free_pt;
+        if (!searchNearestFreeSpace(pt, free_pt))
+        {
+            //[核心修复] 找不到逃生点时，绝不给 Random！给一个固定的向量，防止 L-BFGS 崩溃。
+            grad = Eigen::Vector2d(1.0, 0.0);
+            penetration_depth = -2.0; // 负值表示在障碍物内，陷得极深
+            return true;
+        }
+
+        Eigen::Vector2d dir = free_pt - pt;
+        double dist = dir.norm();
+
+        if (dist < 1e-4)
+        {
+            // [核心修复] 离边界极近时，固定逃生方向，绝不用 Random！
+            grad = Eigen::Vector2d(1.0, 0.0);
+            penetration_depth = -0.05; // 负值表示在障碍物内
+            return true;
+        }
+
+        // 逃生梯度：指向最近的安全白格子
+        grad = dir / dist;
+        penetration_depth = -dist; // 负值表示在障碍物内的深度
         return true;
     }
+    else
+    {
+        // ========== 情况 2: 在自由空间，寻找最近的障碍物边界 ==========
+        // 使用 BFS 向外搜索，找到最近的障碍物
+        std::queue<Eigen::Vector2i> q;
+        std::vector<bool> visited(grid_w_ * grid_h_, false);
 
-    // 正确的逃生梯度：指向最近的安全白格子
-    grad = dir / dist;
-    penetration_depth = dist;
-    return true;
+        q.push(Eigen::Vector2i(cx, cy));
+        visited[cx + cy * grid_w_] = true;
+
+        // 八向搜索
+        int dx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+        int dy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+
+        int max_search_steps = 150; // 限制搜索范围，约 1.5 米
+        Eigen::Vector2d obs_pt(-1, -1);
+
+        while (!q.empty() && max_search_steps-- > 0)
+        {
+            Eigen::Vector2i cur = q.front();
+            q.pop();
+
+            // 检查当前格子是否是障碍物
+            if (isOccupied(cur.x(), cur.y()))
+            {
+                indexToPos(cur.x(), cur.y(), obs_pt);
+                break;
+            }
+
+            // 向八个方向扩展
+            for (int i = 0; i < 8; ++i)
+            {
+                int nx = cur.x() + dx[i];
+                int ny = cur.y() + dy[i];
+
+                if (nx >= 0 && nx < grid_w_ && ny >= 0 && ny < grid_h_)
+                {
+                    int idx = nx + ny * grid_w_;
+                    if (!visited[idx])
+                    {
+                        visited[idx] = true;
+                        q.push(Eigen::Vector2i(nx, ny));
+                    }
+                }
+            }
+        }
+
+        if (obs_pt.x() < 0)
+        {
+            // 没有找到障碍物，非常安全
+            grad = Eigen::Vector2d(1.0, 0.0);
+            penetration_depth = param_.safe_distance + 1.0; // 远大于安全距离
+            return false;
+        }
+
+        // 计算到障碍物的方向和距离
+        Eigen::Vector2d dir = pt - obs_pt;  // 从障碍物指向当前点
+        double dist = dir.norm();
+
+        if (dist < 1e-4)
+        {
+            grad = Eigen::Vector2d(1.0, 0.0);
+            penetration_depth = 0.0;
+            return false;
+        }
+
+        // 梯度方向：远离障碍物
+        grad = dir / dist;
+        penetration_depth = dist; // 正值表示在障碍物外的距离
+        return false;
+    }
 }
 int GridMap::getGridW() const
 {

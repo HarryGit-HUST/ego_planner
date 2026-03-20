@@ -80,10 +80,13 @@ private:
     void calcFeasibilityCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient);
 
     // ========================================================================
-    // C++ 与 C 的终极桥梁：L-BFGS 静态回调函数
-    // L-BFGS 库通常是纯 C 语言写的，只认静态函数指针，我们必须用一个壳把它映射回类的内部！
+    // [引入神器]：L-BFGS 静态回调函数
     // ========================================================================
     static double costFunction(void *instance, const double *x, double *g, const int n, const double step);
+        // [新增] 进度窥探器
+    static int _progress(void *instance, const lbfgsfloatval_t *x, const lbfgsfloatval_t *g, const lbfgsfloatval_t fx,
+                         const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
+                         int n, int k, int ls);
 };
 
 #endif // BSPLINE_OPTIMIZER_H

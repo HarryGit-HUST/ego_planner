@@ -221,6 +221,8 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::
     msg.yaw = yaw;
     setpoint_pub_.publish(msg);
 }
+
+
 bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 {
     Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
@@ -229,20 +231,20 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
     if (dist_to_goal < 0.2)
         return true;
 
+    // [新增] 用于锁死悬停点的静态变量
+    static Eigen::Vector2d hover_pt = curr_xy;
     // 监控输出
-    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f", dist_to_goal, current_pos_.z());
+    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f，目前锚点: (%.2f, %.2f)", dist_to_goal, current_pos_.z(), hover_pt.x(), hover_pt.y());
 
     bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
-
-    // 绝对高度必须加上 init_pos_.z() ！！！
-    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
-
     if (need_replan)
     {
         if (!is_planning_.load())
         {
             is_planning_.store(true);
             has_global_plan_ = false;
+            // 【核心修复】在丢失轨迹的那一瞬间，死死锁住当前坐标作为保命锚点！
+            hover_pt = curr_xy;
 
             ROS_WARN_THROTTLE(1.0, "[Boss] 🚨 触发重规划！启动后台子线程计算...");
 
@@ -257,9 +259,10 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
                 is_planning_.store(false); })
                 .detach();
         }
-        ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 维持原地悬停指令");
-        // 主线程保命心跳：原地悬停，速度给 0
-        publishSetpoint(curr_xy, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
+        ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 锁死在锚点 (%.2f, %.2f) 悬停", hover_pt.x(), hover_pt.y());
+        // 【核心修复】必须发布固定的 hover_pt，让飞控 PID 产生强大的对抗拉力！
+        double absolute_target_z = init_pos_.z() + param_.takeoff_height;
+        publishSetpoint(hover_pt, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
         return false;
     }
 

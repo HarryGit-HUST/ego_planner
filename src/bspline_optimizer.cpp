@@ -23,21 +23,49 @@ void BsplineOptimizer::setEnvironment(std::shared_ptr<GridMap> map)
 }
 
 // ============================================================================
-// [核心修复] L-BFGS 回调接口：只处理“自由控制点”
+//[魔法回调] L-BFGS 计算代价与梯度
 // ============================================================================
-//[核心修复] 签名完全对齐
 double BsplineOptimizer::costFunction(void *instance, const double *x, double *grad, const int n, const double step)
 {
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(instance);
-    double cost;
-    Eigen::Map<const Eigen::MatrixXd> q_free_map(x, 2, n / 2);
-    Eigen::MatrixXd q_free = q_free_map;  // 创建副本以绑定到非 const 引用
-    Eigen::MatrixXd g_free = Eigen::MatrixXd::Zero(2, n / 2);  // 局部变量接收梯度
+    double cost = 0;
+
+    // 拷贝内存给 Eigen 计算
+    Eigen::MatrixXd q_free = Eigen::Map<const Eigen::MatrixXd>(x, 2, n / 2);
+    Eigen::MatrixXd g_free = Eigen::MatrixXd::Zero(2, n / 2);
+
     opt->combineCost(q_free, cost, g_free);
-    // 将结果复制回 grad 数组
-    Eigen::Map<Eigen::MatrixXd> grad_map(grad, 2, n / 2);
-    grad_map = g_free;
+
+    // [防御性编程] 检查梯度是否出现 NaN 或 Inf，如果出现，强行清零防止崩溃！
+    if (!g_free.allFinite())
+    {
+        ROS_ERROR_THROTTLE(1.0, "[Optimizer] 🚨 警告：计算出无效梯度 (NaN/Inf)，已强行截断！");
+        for (int i = 0; i < g_free.cols(); i++)
+        {
+            if (!std::isfinite(g_free(0, i)))
+                g_free(0, i) = 0.0;
+            if (!std::isfinite(g_free(1, i)))
+                g_free(1, i) = 0.0;
+        }
+    }
+
+    // 拷贝回 C 数组
+    Eigen::Map<Eigen::MatrixXd>(grad, 2, n / 2) = g_free;
     return cost;
+}
+// ============================================================================
+//[窥探神器] L-BFGS 内部进度监视器
+// ============================================================================
+int BsplineOptimizer::_progress(void *instance, const lbfgsfloatval_t *x, const lbfgsfloatval_t *g, const lbfgsfloatval_t fx,
+                                const lbfgsfloatval_t xnorm, const lbfgsfloatval_t gnorm, const lbfgsfloatval_t step,
+                                int n, int k, int ls)
+{
+    // 只打印前几次和关键次，防止刷屏
+    if (k <= 3 || k % 10 == 0)
+    {
+        ROS_INFO("[L-BFGS 内部] Iter %d: 代价 fx=%.4f, 梯度范数 ||g||=%.4f, 步长 step=%.6f", k, fx, gnorm, step);
+    }
+    return 0; // 返回 0 表示继续优化
 }
 
 void BsplineOptimizer::combineCost(const Eigen::MatrixXd &q_free, double &f_combine, Eigen::MatrixXd &g_free)
@@ -110,43 +138,53 @@ bool BsplineOptimizer::optimize(Eigen::MatrixXd &ctrl_pts, double ts)
     // 提取自由控制点（索引 3 到 pt_num-4）
     Eigen::MatrixXd q_free = ctrl_pts.block(0, 3, 2, free_num);
 
-    // 将自由控制点转换为 L-BFGS 需要的向量格式
-    std::vector<double> x_vec(q_free.size());
-    Eigen::Map<Eigen::VectorXd>(x_vec.data(), q_free.size()) =
-        Eigen::Map<const Eigen::VectorXd>(q_free.data(), q_free.size());
+    // ========================================================================
+    // [史诗级修复]：放弃 std::vector，使用 lbfgs_malloc 保证 16字节内存对齐！
+    // 彻底消灭 SSE 指令集不兼容导致的随机崩溃和 -1001 错误！
+    // ========================================================================
+    int var_num = free_num * 2;
+    lbfgsfloatval_t *x_ptr = lbfgs_malloc(var_num);
+    if (x_ptr == NULL)
+    {
+        ROS_ERROR("Failed to allocate memory for L-BFGS!");
+        return false;
+    }
+    // 拷贝初始控制点到对齐内存中
+    Eigen::Map<Eigen::VectorXd>(x_ptr, var_num) = Eigen::Map<const Eigen::VectorXd>(q_free.data(), q_free.size());
 
     lbfgs_parameter_t lbfgs_params;
-    lbfgs_parameter_init(&lbfgs_params); // 先全部载入默认安全配置
-
+    lbfgs_parameter_init(&lbfgs_params);
     lbfgs_params.max_iterations = param_.max_iteration_num;
+    lbfgs_params.epsilon = 1e-4; // 停止阈值
     lbfgs_params.past = 3;
-    lbfgs_params.delta = 1e-5;
-
-    // 【删除这几行坑人的限制】
-    // lbfgs_params.max_step = 0.01;  <-- 这行必须删掉！就是它导致了 -999！
-    // lbfgs_params.linesearch = LBFGS_LINESEARCH_BACKTRACKING_ARMIJO; <-- 删掉，用默认
-    // lbfgs_params.ftol = 1e-4;  <-- 删掉
-    // lbfgs_params.wolfe = 0.9;  <-- 删掉
 
     double final_cost;
     ROS_INFO("[Optimizer] 启动 L-BFGS，自由点数：%d", free_num);
 
+    // 传入我们新写的 _progress 监视器
     int ret = lbfgs(
-        x_vec.size(), x_vec.data(), &final_cost,
-        BsplineOptimizer::costFunction, nullptr, this, &lbfgs_params);
+        var_num, x_vec, &final_cost,
+        BsplineOptimizer::costFunction,
+        BsplineOptimizer::_progress,
+        this, &lbfgs_params);
 
-    if (ret >= 0 || ret == LBFGS_ALREADY_MINIMIZED)
+    bool success = false;
+    if (ret >= 0 || ret == LBFGS_ALREADY_MINIMIZED || ret == LBFGSERR_MAXIMUMITERATION)
     {
-        Eigen::MatrixXd q_free_opt = Eigen::Map<const Eigen::MatrixXd>(x_vec.data(), 2, free_num);
+        // 将优化结果拷贝回 Eigen 矩阵
+        Eigen::MatrixXd q_free_opt = Eigen::Map<const Eigen::MatrixXd>(x_ptr, 2, free_num);
         ctrl_pts.block(0, 3, 2, free_num) = q_free_opt;
-        ROS_INFO("[Optimizer] ✅ 优化成功！最终代价：%.2f (迭代 %d 次)", final_cost, ret);
-        return true;
+        ROS_INFO("[Optimizer] ✅ 优化成功！最终代价：%.2f (返回状态 %d)", final_cost, ret);
+        success = true;
     }
     else
     {
         ROS_ERROR("[Optimizer] ❌ L-BFGS 失败！错误码：%d", ret);
-        return false;
+        success = false;
     }
+    // [极其重要]：释放对齐内存，防止内存泄漏！
+    lbfgs_free(x_ptr);
+    return success;
 }
 
 // 你的数学公式完美保留，仅增加边界保护
@@ -163,29 +201,31 @@ void BsplineOptimizer::calcSmoothnessCost(const Eigen::MatrixXd &q, double &cost
 }
 
 // -------------------------------------------------------------------------
-// [核心数学修复] 碰撞代价与梯度 (将引力黑洞变成弹簧护盾)
+// [核心数学修复] 碰撞代价与梯度 (真正的物理真理)
 // -------------------------------------------------------------------------
 void BsplineOptimizer::calcCollisionCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient)
 {
     cost = 0.0;
     gradient.setZero();
 
-    Eigen::Vector2d grad_dir;
-    double depth; // 陷入障碍物的深度
+    Eigen::Vector2d grad_dir; // 指向最近安全白格子的逃生方向
+    double depth;             // 陷入障碍物的深度 (米)
 
     for (int i = 0; i < pt_num_; ++i)
     {
-        // 如果返回 true，说明点在地图的障碍物膨胀区内，depth 是陷入深度
+        // 如果返回 true，说明该控制点已经处于危险的黑块中！
         if (grid_map_->getObstacleGradient(q.col(i), grad_dir, depth))
         {
-            // [史诗级修复] 陷入越深，惩罚越大！还要加上额外的安全缓冲！
-            double penalty = depth + param_.safe_distance;
+            // 【数学真理】：depth 就是陷入深度，陷得越深，我们要给的代价必须越大！
+            // 代价 = 权重 * depth^2
+            cost += param_.weight_collision * depth * depth;
 
-            // 代价 = 权重 * (陷入深度 + 安全缓冲)^2
-            cost += param_.weight_collision * penalty * penalty;
-
-            // 梯度指向安全区域 (grad_dir)。为了让点顺着逃生方向走，降低 Cost，梯度带负号。
-            gradient.col(i) += -2.0 * param_.weight_collision * penalty * grad_dir;
+            // 【梯度推导】：
+            // d(Cost)/d(P_i) = 2 * weight * depth * d(depth)/d(P_i)
+            // 因为顺着 grad_dir 走，能逃离黑块（让 depth 减小）。
+            // 所以深度的下降梯度是 -grad_dir。
+            // 所以总梯度是负的，完美闭环！
+            gradient.col(i) += -2.0 * param_.weight_collision * depth * grad_dir;
         }
     }
 }

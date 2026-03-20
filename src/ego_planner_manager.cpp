@@ -93,7 +93,14 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
     double ratio;
     if (!local_traj_.checkFeasibility(ratio, false))
     {
-        ROS_WARN("[CEO] 轨迹超速，正在进行动力学时间拉长...");
+        // [保命断路器] 如果优化出来的轨迹极其扭曲，导致需要把时间拉长 3 倍以上
+        // 说明这是一条“垃圾轨迹”，直接丢弃，让飞控走 Fallback 防线！
+        if (ratio > 3.0)
+        {
+            ROS_ERROR("[CEO] 优化轨迹极其扭曲 (需减速 %.1f 倍)，主动废弃该轨迹！", ratio);
+            return false;
+        }
+        ROS_WARN("[CEO] 轨迹超速，正在进行动力学时间拉长 %.2f 倍...", ratio);
         local_traj_.lengthenTime(ratio);
     }
 
@@ -206,4 +213,22 @@ void PlannerManager::publishVisualization()
         }
         bspline_pub_.publish(msg);
     }
+}
+
+bool PlannerManager::checkCollisionLocal(double time_horizon)
+{
+    if (local_traj_.getControlPoints().cols() == 0)
+        return true; // 没轨迹当然不安全
+
+    double t_sec = (ros::Time::now() - traj_start_time_).toSec();
+    double t_end = std::min(t_sec + time_horizon, local_traj_.getTimeSum());
+
+    // 沿着接下来的 time_horizon 时间段，每隔 0.1 秒检查一次前方会不会撞
+    for (double t = t_sec; t <= t_end; t += 0.1)
+    {
+        Eigen::Vector2d pt = local_traj_.evaluateDeBoor(t);
+        if (grid_map_->isOccupied(pt))
+            return true; // 会撞！
+    }
+    return false; // 安全！
 }

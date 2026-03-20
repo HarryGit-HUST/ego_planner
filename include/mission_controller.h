@@ -47,6 +47,7 @@ public:
 private:
     MissionState current_state_;
     Eigen::Vector3d current_pos_;
+    Eigen::Vector3d current_vel_; // [新增] 用于柔性刹车的当前速度
     double current_yaw_;
 
     mavros_msgs::State mavros_state_;

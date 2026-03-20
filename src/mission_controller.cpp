@@ -205,17 +205,15 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::
     mavros_msgs::PositionTarget msg;
     msg.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
 
-    // [安全修复] 纯位置+偏航控制。忽略速度、加速度和力。
-    // 掩码 3064 = 0b1011 1111 1000
-    msg.type_mask = 3064;
+
+    msg.type_mask = 3040;
 
     msg.position.x = xy.x();
     msg.position.y = xy.y();
     msg.position.z = z;
 
-    // (速度虽然忽略，但也赋个 0 防御)
-    msg.velocity.x = 0;
-    msg.velocity.y = 0;
+    msg.velocity.x = vel_xy.x();
+    msg.velocity.y = vel_xy.y();
     msg.velocity.z = 0;
 
     msg.yaw = yaw;
@@ -260,10 +258,25 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
                 is_planning_.store(false); })
                 .detach();
         }
-        ROS_INFO_THROTTLE(0.5, "[Boss] 等待后台规划... 锁死在锚点 (%.2f, %.2f) 悬停", hover_pt.x(), hover_pt.y());
-        // 【核心修复】必须发布固定的 hover_pt，让飞控 PID 产生强大的对抗拉力！
-        
-        publishSetpoint(hover_pt, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
+        // =========================================================================
+        // [史诗级保命防线] Fallback 机制！
+        // =========================================================================
+        // 防线一：旧轨迹复用！即使需要 replan，先看看旧轨迹接下来 1.5 秒还能不能飞？
+        if (has_global_plan_ && !planner_manager_->checkCollisionLocal(1.5))
+        {
+            ROS_WARN_THROTTLE(1.0, "[Boss] 🛡️ 规划失败或延迟，但历史轨迹安全！继续沿旧轨迹盲飞！");
+            double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
+            Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
+            Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
+            publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
+            return false;
+        }
+
+        // 防线二：柔性刹车！如果旧轨迹也撞墙了，绝不原地急停，顺着速度向量缓冲 0.8 秒！
+        ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 失去所有安全轨迹！执行柔性刹车紧急避险！");
+        has_global_plan_ = false;                             // 彻底废弃旧轨迹
+        Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8; // 顺着惯性往前滑行 0.8 秒的距离
+        publishSetpoint(brake_pos, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
         return false;
     }
 
@@ -353,6 +366,10 @@ void MissionController::odomCallback(const nav_msgs::Odometry::ConstPtr &msg)
     current_pos_.x() = msg->pose.pose.position.x;
     current_pos_.y() = msg->pose.pose.position.y;
     current_pos_.z() = msg->pose.pose.position.z;
+    // [新增] 记录当前线速度，用于柔性刹车
+    current_vel_.x() = msg->twist.twist.linear.x;
+    current_vel_.y() = msg->twist.twist.linear.y;
+    current_vel_.z() = msg->twist.twist.linear.z;
     tf::Quaternion q;
     tf::quaternionMsgToTF(msg->pose.pose.orientation, q);
     double r, p;

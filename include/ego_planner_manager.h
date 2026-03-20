@@ -47,6 +47,8 @@ public:
 
     void publishVisualization(); // 暴露给 Boss 的一键可视化接口
 
+    bool checkCollisionLocal(double time_horizon); // 检查未来 time_horizon 秒内的轨迹是否安全
+
 private:
     // ================= 雇佣的下属部门 (智能指针) =================
     // 使用 shared_ptr，生命周期由 CEO 统一管理

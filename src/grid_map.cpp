@@ -121,25 +121,43 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
             occupancy_buffer_[i] = 0;
     }
 
-pcl::PointCloud<pcl::PointXYZI> cloud;
-pcl::fromROSMsg(*msg, cloud);
+    pcl::PointCloud<pcl::PointXYZI> cloud;
+    pcl::fromROSMsg(*msg, cloud);
 
-for (const auto &pt : cloud.points)
-{
-    int cx, cy;
-    if (!posToIndex(Eigen::Vector2d(pt.x, pt.y), cx, cy))
-        continue;
-    if (pt.intensity < param_.intensity_threshold)
+    // 重新引入膨胀机制！
+    int inf_cells = std::ceil(param_.safe_distance / param_.resolution);
+    int inf_sq = inf_cells * inf_cells;
+
+    for (const auto &pt : cloud.points)
     {
-        ROS_INFO_THROTTLE(1.0, "[GridMap] 🚨 警告：点云中检测到低强度点 (intensity=%.2f)，已被过滤！", pt.intensity);
-        continue;
-    int idx = cx + cy * grid_w_;
-    if (idx >= 0 && idx < occupancy_buffer_.size() && occupancy_buffer_[idx] < 1000)
-    {
-        occupancy_buffer_[idx] = pt.intensity * 999;  // 修复：cloud → pt
+        // 1. Intensity 过滤
+        if (pt.intensity < param_.intensity_threshold)
+            continue;
+
+        int cx, cy;
+        if (!posToIndex(Eigen::Vector2d(pt.x, pt.y), cx, cy))
+            continue;
+
+        // 2. 将高置信度点向四周安全膨胀
+        for (int dx = -inf_cells; dx <= inf_cells; ++dx)
+        {
+            for (int dy = -inf_cells; dy <= inf_cells; ++dy)
+            {
+                if (dx * dx + dy * dy <= inf_sq)
+                {
+                    int nx = cx + dx, ny = cy + dy;
+                    if (nx >= 0 && nx < grid_w_ && ny >= 0 && ny < grid_h_)
+                    {
+                        if (occupancy_buffer_[nx + ny * grid_w_] != 1000)
+                        {
+                            // 用 std::max 防止高频点被低频点覆盖
+                            occupancy_buffer_[nx + ny * grid_w_] = std::max(occupancy_buffer_[nx + ny * grid_w_], (int)(pt.intensity * 999));
+                        }
+                    }
+                }
+            }
+        }
     }
-}
-}
 }
 // 🧱 积木三：寻找最近的白格子 (BFS 广度优先搜索)
 bool GridMap::searchNearestFreeSpace(const Eigen::Vector2d &pt, Eigen::Vector2d &free_pt) const

@@ -140,17 +140,41 @@ bool PlannerManager::checkCollision()
     if (local_traj_.getControlPoints().cols() == 0)
         return false;
     double duration = local_traj_.getTimeSum();
+    double t_now = (ros::Time::now() - traj_start_time_).toSec();
 
-    // [核心逻辑修复]：跳过前 0.5 秒的碰撞检测！
-    // 只要我接下来的 0.5 秒不会真撞上死墙，就允许我擦着膨胀区飞出去！
-    for (double t = 0.5; t <= duration; t += 0.1)
+    bool imminent_crash = false;
+    bool future_blocked = false;
+
+    // 检查未来的轨迹
+    for (double t = t_now; t <= duration; t += 0.1)
     {
         Eigen::Vector2d pt = local_traj_.evaluateDeBoor(t);
         if (grid_map_->isOccupied(pt))
         {
-            ROS_WARN_THROTTLE(1.0, "[CEO 警报] 轨迹未来 %.1fs 处受阻！触发重规划！", t);
-            return true;
+            if (t - t_now < 0.5)
+            {
+                imminent_crash = true; // 0.5秒内必撞，十万火急！
+                break;
+            }
+            else
+            {
+                future_blocked = true; // 远处受阻，可以等一等再规划
+            }
         }
+    }
+
+    // 冷却时间判断：距离上次规划是否超过 1.5 秒？
+    bool cooldown_ok = (ros::Time::now() - traj_start_time_).toSec() > 1.5;
+
+    if (imminent_crash)
+    {
+        ROS_WARN_THROTTLE(0.5, "[CEO] 🚨 0.5秒内即将撞击！紧急重规划！");
+        return true;
+    }
+    if (future_blocked && cooldown_ok)
+    {
+        ROS_INFO_THROTTLE(1.0, "[CEO] 远处轨迹受阻，冷却完毕，平稳触发重规划。");
+        return true;
     }
     return false;
 }

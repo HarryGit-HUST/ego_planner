@@ -223,79 +223,57 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::
     setpoint_pub_.publish(msg);
 }
 
-bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
+bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
+
+if (need_replan)
 {
-    Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
-    double dist_to_goal = (curr_xy - target_xy).norm();
-
-    // 1. 到达阈值放宽到 0.3m
-    if (dist_to_goal < 0.3)
-        return true;
-
-    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
-
-    // =========================================================================
-    // [新机制] 末端磁吸效应 (Final Approach)
-    // 距离终点小于 0.8 米时，放弃花里胡哨的 B 样条避障，直接靠位置环硬吸过去！
-    // 彻底解决终点绕 8 字跳舞的问题！
-    // =========================================================================
-    if (dist_to_goal < 0.8)
+    if (!is_planning_.load())
     {
-        ROS_INFO_THROTTLE(1.0, "[Boss] 🏁 末端冲刺！强行磁吸至终点 (距终点 %.2fm)", dist_to_goal);
-        publishSetpoint(target_xy, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
-        return false;
+        is_planning_.store(true);
+
+        // 【史诗级平滑修复：轨迹拼接 (Warm Start)】
+        Eigen::Vector2d start_pt;
+        if (has_global_plan_)
+        {
+            // 如果还有旧轨迹，预测 0.5 秒后的位置作为新起点！
+            double t_future = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec() + 0.5;
+            start_pt = planner_manager_->getPosition(t_future);
+            ROS_INFO_THROTTLE(1.0, "[Boss] 🔄 复用历史动量，预测前方 0.5s 起点进行平滑拼接...");
+        }
+        else
+        {
+            // 彻底没轨迹了，只能从当前位置起步
+            start_pt = curr_xy;
+        }
+
+        std::thread([this, start_pt, target_xy]()
+                    {
+                bool success = planner_manager_->replan(start_pt, target_xy);
+                // 只有成功了才覆盖全局状态
+                if(success) has_global_plan_ = true; 
+                is_planning_.store(false); })
+            .detach();
     }
 
-    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f", dist_to_goal, current_pos_.z());
-
-    bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
-
-    if (need_replan)
+    // 【核心控制流】主线程绝对不阻塞！
+    if (has_global_plan_)
     {
-        if (!is_planning_.load())
-        {
-            is_planning_.store(true);
-            has_global_plan_ = false;
-
-            ROS_WARN_THROTTLE(1.0, "[Boss] 🚨 触发重规划！启动后台子线程计算...");
-            Eigen::Vector2d start_pt = curr_xy;
-            Eigen::Vector2d end_pt = target_xy;
-
-            std::thread([this, start_pt, end_pt]()
-                        {
-                ROS_INFO("[子线程] 🌐 线程 %zu 开始寻路计算...", std::hash<std::thread::id>{}(std::this_thread::get_id()));
-                bool success = planner_manager_->replan(start_pt, end_pt);
-                has_global_plan_ = success;
-                is_planning_.store(false); })
-                .detach();
-        }
-
-        if (has_global_plan_ && !planner_manager_->checkCollisionLocal(1.0))
-        {
-            ROS_WARN_THROTTLE(1.0, "[Boss] 🛡️ 规划延迟，但历史轨迹安全！继续沿旧轨迹盲飞！");
-            double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
-            Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
-            Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
-            publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
-            return false;
-        }
-
-        ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 失去安全轨迹！执行柔性刹车避险！");
-        has_global_plan_ = false;
-
-        // [采纳你的优秀修复] 获取当前速度 xy 分量
+        // 在子线程计算期间，继续顺着旧轨迹飞！绝不原地急停！
+        double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
+        Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
+        Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
+        publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
+        return false;
+    }
+    else
+    {
+        // 连旧轨迹都没了，只能执行柔性刹车
+        ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 无安全轨迹可用！执行柔性刹车紧急避险！");
         Eigen::Vector2d curr_vel = current_vel_.head<2>();
         Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8;
         publishSetpoint(brake_pos, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
         return false;
     }
-
-    double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
-    Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
-    Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
-    publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
-
-    return false;
 }
 bool MissionController::setOffboardAndArm()
 {

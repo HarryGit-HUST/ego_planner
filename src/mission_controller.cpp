@@ -6,10 +6,13 @@
 
 MissionController::MissionController()
     : current_state_(MissionState::IDLE),
+      current_pos_(Eigen::Vector3d::Zero()),
+      current_vel_(Eigen::Vector3d::Zero()),
+      current_yaw_(0.0),
       is_connected_(false),
       has_global_plan_(false),
       init_yaw_(0.0),
-      is_planning_(false) {} // 初始化原子变量
+      is_planning_(false) {}
 
 MissionController::~MissionController() {}
 
@@ -233,7 +236,7 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
     // [新增] 用于锁死悬停点的静态变量
     static Eigen::Vector2d hover_pt = curr_xy;
     // 监控输出
-    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f，目前锚点: (%.2f, %.2f)", dist_to_goal, current_pos_.z(), hover_pt.x(), hover_pt.y());
+    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f,当前位置: (%.2f, %.2f)", dist_to_goal, current_pos_.z(), current_pos_.x(), current_pos_.y());
 
     bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
     if (need_replan)
@@ -274,8 +277,9 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 
         // 防线二：柔性刹车！如果旧轨迹也撞墙了，绝不原地急停，顺着速度向量缓冲 0.8 秒！
         ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 失去所有安全轨迹！执行柔性刹车紧急避险！");
-        has_global_plan_ = false;                             // 彻底废弃旧轨迹
-        Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8; // 顺着惯性往前滑行 0.8 秒的距离
+        has_global_plan_ = false;                                         // 彻底废弃旧轨迹
+        Eigen::Vector2d curr_vel = current_vel_.head<2>();                // 获取当前速度的 xy 分量
+        Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8;             // 顺着惯性往前滑行 0.8 秒的距离
         publishSetpoint(brake_pos, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
         return false;
     }

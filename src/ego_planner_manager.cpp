@@ -95,12 +95,13 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
     {
         // [保命断路器] 如果优化出来的轨迹极其扭曲，导致需要把时间拉长 3 倍以上
         // 说明这是一条“垃圾轨迹”，直接丢弃，让飞控走 Fallback 防线！
-        if (ratio > 3.0)
+        if (ratio > 10.0)
         {
             ROS_ERROR("[CEO] 优化轨迹极其扭曲 (需减速 %.1f 倍)，主动废弃该轨迹！", ratio);
             return false;
         }
         ROS_WARN("[CEO] 轨迹超速，正在进行动力学时间拉长 %.2f 倍...", ratio);
+        ratio = std::min(ratio, 5.0); // 防止过度拉长导致飞行时间过长
         local_traj_.lengthenTime(ratio);
     }
 

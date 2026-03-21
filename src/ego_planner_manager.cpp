@@ -140,12 +140,15 @@ bool PlannerManager::checkCollision()
     if (local_traj_.getControlPoints().cols() == 0)
         return false;
     double duration = local_traj_.getTimeSum();
-    for (double t = 0.0; t <= duration; t += 0.1)
+
+    // [核心逻辑修复]：跳过前 0.5 秒的碰撞检测！
+    // 只要我接下来的 0.5 秒不会真撞上死墙，就允许我擦着膨胀区飞出去！
+    for (double t = 0.5; t <= duration; t += 0.1)
     {
         Eigen::Vector2d pt = local_traj_.evaluateDeBoor(t);
         if (grid_map_->isOccupied(pt))
         {
-            ROS_WARN_THROTTLE(1.0, "[CEO 警报] 现存轨迹前方出现障碍物！触发重规划！");
+            ROS_WARN_THROTTLE(1.0, "[CEO 警报] 轨迹未来 %.1fs 处受阻！触发重规划！", t);
             return true;
         }
     }

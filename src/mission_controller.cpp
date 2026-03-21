@@ -223,51 +223,56 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::
     setpoint_pub_.publish(msg);
 }
 
-
 bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 {
     Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
     double dist_to_goal = (curr_xy - target_xy).norm();
-    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
 
-    if (dist_to_goal < 0.2)
+    // 1. 到达阈值放宽到 0.3m
+    if (dist_to_goal < 0.3)
         return true;
 
-    // [新增] 用于锁死悬停点的静态变量
-    static Eigen::Vector2d hover_pt = curr_xy;
-    // 监控输出
-    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f,当前位置: (%.2f, %.2f)", dist_to_goal, current_pos_.z(), current_pos_.x(), current_pos_.y());
+    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
+
+    // =========================================================================
+    // [新机制] 末端磁吸效应 (Final Approach)
+    // 距离终点小于 0.8 米时，放弃花里胡哨的 B 样条避障，直接靠位置环硬吸过去！
+    // 彻底解决终点绕 8 字跳舞的问题！
+    // =========================================================================
+    if (dist_to_goal < 0.8)
+    {
+        ROS_INFO_THROTTLE(1.0, "[Boss] 🏁 末端冲刺！强行磁吸至终点 (距终点 %.2fm)", dist_to_goal);
+        publishSetpoint(target_xy, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
+        return false;
+    }
+
+    ROS_INFO_THROTTLE(1.0, "[Boss] 巡航中 -> 距终点: %.2fm, 真实Z: %.2f", dist_to_goal, current_pos_.z());
 
     bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
+
     if (need_replan)
     {
         if (!is_planning_.load())
         {
             is_planning_.store(true);
             has_global_plan_ = false;
-            // 【核心修复】在丢失轨迹的那一瞬间，死死锁住当前坐标作为保命锚点！
-            hover_pt = curr_xy;
 
             ROS_WARN_THROTTLE(1.0, "[Boss] 🚨 触发重规划！启动后台子线程计算...");
-
             Eigen::Vector2d start_pt = curr_xy;
             Eigen::Vector2d end_pt = target_xy;
 
             std::thread([this, start_pt, end_pt]()
                         {
-                            ROS_INFO("[子线程] 🌐 线程 %zu 开始寻路计算...", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+                ROS_INFO("[子线程] 🌐 线程 %zu 开始寻路计算...", std::hash<std::thread::id>{}(std::this_thread::get_id()));
                 bool success = planner_manager_->replan(start_pt, end_pt);
                 has_global_plan_ = success;
                 is_planning_.store(false); })
                 .detach();
         }
-        // =========================================================================
-        // [史诗级保命防线] Fallback 机制！
-        // =========================================================================
-        // 防线一：旧轨迹复用！即使需要 replan，先看看旧轨迹接下来 1.5 秒还能不能飞？
-        if (has_global_plan_ && !planner_manager_->checkCollisionLocal(1.5))
+
+        if (has_global_plan_ && !planner_manager_->checkCollisionLocal(1.0))
         {
-            ROS_WARN_THROTTLE(1.0, "[Boss] 🛡️ 规划失败或延迟，但历史轨迹安全！继续沿旧轨迹盲飞！");
+            ROS_WARN_THROTTLE(1.0, "[Boss] 🛡️ 规划延迟，但历史轨迹安全！继续沿旧轨迹盲飞！");
             double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
             Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
             Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
@@ -275,26 +280,23 @@ bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
             return false;
         }
 
-        // 防线二：柔性刹车！如果旧轨迹也撞墙了，绝不原地急停，顺着速度向量缓冲 0.8 秒！
-        ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 失去所有安全轨迹！执行柔性刹车紧急避险！");
-        has_global_plan_ = false;                                         // 彻底废弃旧轨迹
-        Eigen::Vector2d curr_vel = current_vel_.head<2>();                // 获取当前速度的 xy 分量
-        Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8;             // 顺着惯性往前滑行 0.8 秒的距离
+        ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 失去安全轨迹！执行柔性刹车避险！");
+        has_global_plan_ = false;
+
+        // [采纳你的优秀修复] 获取当前速度 xy 分量
+        Eigen::Vector2d curr_vel = current_vel_.head<2>();
+        Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8;
         publishSetpoint(brake_pos, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
         return false;
     }
 
-    // 正常循迹：同时索要【位置】和【速度】
     double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
     Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
     Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
-
-    // 发送带有前馈速度的完美控制指令！
-    publishSetpoint(cmd_pos, cmd_vel,absolute_target_z, init_yaw_);
+    publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
 
     return false;
 }
-
 bool MissionController::setOffboardAndArm()
 {
     static ros::Time last_mode_req = ros::Time::now();

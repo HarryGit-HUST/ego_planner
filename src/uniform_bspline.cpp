@@ -82,27 +82,19 @@ UniformBspline UniformBspline::getDerivative() const
 // [修复] 加上了 UniformBspline:: 作用域
 bool UniformBspline::checkFeasibility(double &ratio, bool show_info) const
 {
-    // 直接用面向对象的思想，极其优雅！
     UniformBspline vel_spline = getDerivative();
     UniformBspline acc_spline = vel_spline.getDerivative();
 
     double max_vel = vel_spline.getControlPoints().colwise().norm().maxCoeff();
     double max_acc = acc_spline.getControlPoints().colwise().norm().maxCoeff();
 
-    if (show_info)
-    {
-        std::cout << "[B样条诊断] 最大速度: " << max_vel << " m/s, 最大加速度: " << max_acc << " m/s^2" << std::endl;
-    }
-
     if (max_vel > limit_vel_ || max_acc > limit_acc_)
     {
         double vel_ratio = max_vel / limit_vel_;
-        double acc_ratio = max_acc / limit_acc_;
+        // [史诗级数学修复] 加速度的时间缩放必须开根号！！
+        double acc_ratio = std::sqrt(max_acc / limit_acc_);
+
         ratio = std::max(vel_ratio, acc_ratio);
-        
-        // [防御性编程] 限制 ratio 的范围，防止过大导致数值不稳定
-        ratio = std::max(1.0, std::min(ratio, 10.0));
-        
         if (show_info)
         {
             std::cout << "  ❌ 轨迹超载！需要将时间拉长 " << ratio << " 倍！" << std::endl;
@@ -111,6 +103,7 @@ bool UniformBspline::checkFeasibility(double &ratio, bool show_info) const
     }
     return true;
 }
+
 
 void UniformBspline::lengthenTime(double ratio)
 {

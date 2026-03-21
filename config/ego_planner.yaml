@@ -30,7 +30,7 @@ planner:
 manager:
   max_vel: 1.5
   max_acc: 1.5
-  ctrl_pt_dist: 1.5    # B样条控制点间距
+  ctrl_pt_dist: 0.3    # B样条控制点间距
 
 # ==========================================
 # 4. 优化部 (L-BFGS Optimizer) 配置
@@ -38,7 +38,7 @@ manager:
 bspline_optimizer:
   weight_smooth: 2.0       # 越高轨迹越直
   weight_collision: 7.0    # 越高越怕撞墙
-  weight_feasibility: 1.0  # [修复] 动力学权重降低 10 倍，防止梯度爆炸
+  weight_feasibility: 0.1  # [修复] 动力学权重降低 10 倍，防止梯度爆炸
   safe_distance: 0.4       # 避障安全/膨胀距离 (非常关键)
   max_vel: 1.5
   max_acc: 1.5

@@ -223,58 +223,125 @@ void MissionController::publishSetpoint(const Eigen::Vector2d &xy, const Eigen::
     setpoint_pub_.publish(msg);
 }
 
-bool need_replan = !has_global_plan_ || planner_manager_->checkCollision();
-
-if (need_replan)
+bool MissionController::flyToXY(const Eigen::Vector2d &target_xy)
 {
-    if (!is_planning_.load())
-    {
-        is_planning_.store(true);
+    double absolute_target_z = init_pos_.z() + param_.takeoff_height;
+    Eigen::Vector2d curr_xy(current_pos_.x(), current_pos_.y());
 
-        // 【史诗级平滑修复：轨迹拼接 (Warm Start)】
-        Eigen::Vector2d start_pt;
+    // 检查是否到达目标点（允许 0.15m 误差）
+    if ((curr_xy - target_xy).norm() < 0.15)
+    {
+        return true;
+    }
+
+    // [修复] 只在真正必要时才触发重规划，增加冷却时间防止频繁切换
+    static ros::Time last_replan_time = ros::Time(0);
+    double time_since_last_replan = (ros::Time::now() - last_replan_time).toSec();
+
+    bool collision_detected = planner_manager_->checkCollision();
+    bool need_replan = !has_global_plan_ || (collision_detected && time_since_last_replan > 1.0);
+
+    if (need_replan)
+    {
+        if (!is_planning_.load())
+        {
+            is_planning_.store(true);
+
+            // 【核心修复】新轨迹起点 = 当前位置 + 当前速度方向的前馈
+            // 问题根源：之前用旧轨迹预测点作为新起点，但无人机可能已经偏离旧轨迹
+            // 解决方案：直接用当前位置作为新起点，保证轨迹连续性
+            Eigen::Vector2d start_pt;
+            
+            if (has_global_plan_)
+            {
+                // 计算当前时刻在旧轨迹上的理论位置
+                double t_now = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
+                Eigen::Vector2d traj_pos = planner_manager_->getPosition(t_now);
+                Eigen::Vector2d traj_vel = planner_manager_->getVelocity(t_now);
+                
+                // 计算当前位置与轨迹位置的偏差
+                double pos_error = (curr_xy - traj_pos).norm();
+                
+                ROS_INFO_THROTTLE(1.0, "[Boss] 🔄 轨迹重规划 | 当前位置 (%.2f, %.2f) | 轨迹位置 (%.2f, %.2f) | 偏差 %.3fm",
+                                  curr_xy.x(), curr_xy.y(), traj_pos.x(), traj_pos.y(), pos_error);
+                
+                // [关键决策] 如果偏差超过 0.3m，说明无人机已经偏离旧轨迹
+                // 此时应该用当前位置作为新起点，而不是预测点
+                if (pos_error > 0.3)
+                {
+                    // 使用当前位置 + 速度方向的前馈补偿（0.2 秒预测）
+                    start_pt = curr_xy + current_vel_.head<2>() * 0.2;
+                    ROS_INFO_THROTTLE(1.0, "[Boss] ⚠️  位置偏差过大！使用当前位置 + 速度前馈作为新起点");
+                }
+                else
+                {
+                    // 偏差较小，使用轨迹上的预测点（0.2 秒后）
+                    double t_future = t_now + 0.2;
+                    start_pt = planner_manager_->getPosition(t_future);
+                    ROS_INFO_THROTTLE(1.0, "[Boss] ✓ 位置偏差正常，使用轨迹预测点作为新起点");
+                }
+            }
+            else
+            {
+                // 彻底没轨迹了，从当前位置起步
+                start_pt = curr_xy;
+            }
+
+            std::thread([this, start_pt, target_xy]()
+                        {
+                    bool success = planner_manager_->replan(start_pt, target_xy);
+                    // 只有成功了才覆盖全局状态
+                    if(success) {
+                        has_global_plan_ = true;
+                    }
+                    is_planning_.store(false); })
+                .detach();
+
+            // [修复] 在主线程记录重规划时间，避免 lambda 捕获静态变量
+            last_replan_time = ros::Time::now();
+        }
+
+        // 【核心控制流】主线程绝对不阻塞！
         if (has_global_plan_)
         {
-            // 如果还有旧轨迹，预测 0.5 秒后的位置作为新起点！
-            double t_future = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec() + 0.5;
-            start_pt = planner_manager_->getPosition(t_future);
-            ROS_INFO_THROTTLE(1.0, "[Boss] 🔄 复用历史动量，预测前方 0.5s 起点进行平滑拼接...");
+            // 在子线程计算期间，继续顺着旧轨迹飞！绝不原地急停！
+            double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
+            Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
+            Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
+            publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
+            return false;
         }
         else
         {
-            // 彻底没轨迹了，只能从当前位置起步
-            start_pt = curr_xy;
+            // 连旧轨迹都没了，只能执行柔性刹车
+            ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 无安全轨迹可用！执行柔性刹车紧急避险！");
+            Eigen::Vector2d curr_vel = current_vel_.head<2>();
+            Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8;
+            publishSetpoint(brake_pos, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
+            return false;
         }
-
-        std::thread([this, start_pt, target_xy]()
-                    {
-                bool success = planner_manager_->replan(start_pt, target_xy);
-                // 只有成功了才覆盖全局状态
-                if(success) has_global_plan_ = true; 
-                is_planning_.store(false); })
-            .detach();
     }
 
-    // 【核心控制流】主线程绝对不阻塞！
+    // 有有效轨迹时，沿轨迹飞行
     if (has_global_plan_)
     {
-        // 在子线程计算期间，继续顺着旧轨迹飞！绝不原地急停！
         double t_sec = (ros::Time::now() - planner_manager_->getTrajStartTime()).toSec();
+
+        // [关键修复] 限制 t_sec 不超过轨迹总时长，防止越界
+        double traj_duration = planner_manager_->getTrajDuration();
+        if (t_sec > traj_duration)
+        {
+            t_sec = traj_duration;
+        }
+
         Eigen::Vector2d cmd_pos = planner_manager_->getPosition(t_sec);
         Eigen::Vector2d cmd_vel = planner_manager_->getVelocity(t_sec);
         publishSetpoint(cmd_pos, cmd_vel, absolute_target_z, init_yaw_);
-        return false;
     }
-    else
-    {
-        // 连旧轨迹都没了，只能执行柔性刹车
-        ROS_WARN_THROTTLE(0.5, "[Boss] 🛑 无安全轨迹可用！执行柔性刹车紧急避险！");
-        Eigen::Vector2d curr_vel = current_vel_.head<2>();
-        Eigen::Vector2d brake_pos = curr_xy + curr_vel * 0.8;
-        publishSetpoint(brake_pos, Eigen::Vector2d(0, 0), absolute_target_z, init_yaw_);
-        return false;
-    }
+
+    return false;
 }
+
 bool MissionController::setOffboardAndArm()
 {
     static ros::Time last_mode_req = ros::Time::now();

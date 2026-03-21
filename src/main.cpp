@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     while (ros::ok())
     {if(flag==0)
         {
-            ROS_INFO(">>> happy begin 3！<<<");
+            ROS_INFO(">>> happy begin 4！<<<");
             flag=1;
         }
         ros::spinOnce();

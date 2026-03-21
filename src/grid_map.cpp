@@ -115,16 +115,24 @@ void GridMap::buildStaticWalls(double start_x, double start_y)
 
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
 {
+    // [优化 1] 全局指数衰减，而不是清零！让障碍物"缓慢消失"
+    // 衰减系数 0.98 意味着：如果 35 帧 (约 3.5 秒) 没被观测到，置信度才会降到 50%
+    // 这比原来的 0.95 更稳定，防止障碍物"闪烁"导致轨迹穿墙
     for (size_t i = 0; i < occupancy_buffer_.size(); ++i)
     {
         if (occupancy_buffer_[i] < 1000)
-            occupancy_buffer_[i] = 0;
+        {
+            occupancy_buffer_[i] = (int)(occupancy_buffer_[i] * 0.98);
+            // 低于阈值的视为自由空间
+            if (occupancy_buffer_[i] < 5)
+                occupancy_buffer_[i] = 0;
+        }
     }
 
     pcl::PointCloud<pcl::PointXYZI> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
-    // 重新引入膨胀机制！
+    // 膨胀半径（以栅格为单位）
     int inf_cells = std::ceil(param_.safe_distance / param_.resolution);
     int inf_sq = inf_cells * inf_cells;
 
@@ -148,10 +156,14 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
                     int nx = cx + dx, ny = cy + dy;
                     if (nx >= 0 && nx < grid_w_ && ny >= 0 && ny < grid_h_)
                     {
-                        if (occupancy_buffer_[nx + ny * grid_w_] != 1000)
+                        int idx = nx + ny * grid_w_;
+                        // [修复] 静态墙 (1000) 不可覆盖，其他障碍物可以累加
+                        if (occupancy_buffer_[idx] != 1000)
                         {
-                            // 用 std::max 防止高频点被低频点覆盖
-                            occupancy_buffer_[nx + ny * grid_w_] = std::max(occupancy_buffer_[nx + ny * grid_w_], (int)(pt.intensity * 999));
+                            // [优化] 使用累加而不是 max，让持续观测的障碍物置信度更高
+                            // intensity=20 → new_obs=200，累加 3 次就能达到 600（远高于 50 的阈值）
+                            int new_obs = (int)(pt.intensity * 10);
+                            occupancy_buffer_[idx] = std::min(999, occupancy_buffer_[idx] + new_obs);
                         }
                     }
                 }

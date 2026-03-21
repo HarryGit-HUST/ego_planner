@@ -44,6 +44,9 @@ public:
     void buildWalls(double start_x, double start_y);
     // [修复 5] 暴露获取轨迹开始时间的方法，供 Boss 计算时间戳
     ros::Time getTrajStartTime() const { return traj_start_time_; }
+    
+    // [新增] 获取轨迹总时长，用于防止时间越界
+    double getTrajDuration() const { return local_traj_.getTimeSum(); }
 
     void publishVisualization(); // 暴露给 Boss 的一键可视化接口
 

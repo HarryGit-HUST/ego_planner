@@ -38,6 +38,9 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
              start_pt.x(), start_pt.y(), target_pt.x(), target_pt.y());
 
     std::vector<Eigen::Vector2d> astar_path;
+    // [调试] 检查起点和终点的距离
+    double dist = (start_pt - target_pt).norm();
+    ROS_INFO("[CEO] 起点到终点的直线距离：%.2f 米", dist);
     if (!a_star_->search(start_pt, target_pt, astar_path))
     {
         ROS_WARN("[CEO] A* 寻路失败！无法到达终点！");
@@ -50,24 +53,60 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
     // =========================================================================
     // [史诗级修复 1] 路径重采样 (Resampling)：将稀疏的拐角点变成密集的控制点！
     // =========================================================================
+    // [史诗级修复 1] 路径重采样 (Resampling)：将稀疏的拐角点变成密集的控制点！
+    // =========================================================================
     std::vector<Eigen::Vector2d> dense_path;
-    for (size_t i = 0; i < astar_path.size() - 1; ++i)
+    
+    // [关键修复] 强制起点和终点精确等于 replan 传入的 start_pt 和 target_pt
+    Eigen::Vector2d precise_start = start_pt;
+    Eigen::Vector2d precise_end = target_pt;
+    
+    // 重采样第一段：从起点到 A* 第一个拐角
+    if (!astar_path.empty())
     {
-        Eigen::Vector2d p1 = astar_path[i];
-        Eigen::Vector2d p2 = astar_path[i + 1];
+        Eigen::Vector2d p1 = precise_start;
+        Eigen::Vector2d p2 = astar_path.front();
         double seg_len = (p2 - p1).norm();
-
-        // 按照 yaml 里的 ctrl_pt_dist (比如 0.3m) 插入中间点
         int num_pts = std::max(1, (int)std::ceil(seg_len / param_.ctrl_pt_dist));
         for (int j = 0; j < num_pts; ++j)
         {
             dense_path.push_back(p1 + (p2 - p1) * ((double)j / num_pts));
         }
+        
+        // 重采样中间段
+        for (size_t i = 0; i < astar_path.size() - 2; ++i)
+        {
+            Eigen::Vector2d p1 = astar_path[i];
+            Eigen::Vector2d p2 = astar_path[i + 1];
+            double seg_len = (p2 - p1).norm();
+            int num_pts = std::max(1, (int)std::ceil(seg_len / param_.ctrl_pt_dist));
+            for (int j = 0; j < num_pts; ++j)
+            {
+                dense_path.push_back(p1 + (p2 - p1) * ((double)j / num_pts));
+            }
+        }
+        
+        // 重采样最后一段：从 A* 最后一个拐角到终点
+        if (astar_path.size() >= 2)
+        {
+            Eigen::Vector2d p1 = astar_path[astar_path.size() - 2];
+            Eigen::Vector2d p2 = precise_end;
+            double seg_len = (p2 - p1).norm();
+            int num_pts = std::max(1, (int)std::ceil(seg_len / param_.ctrl_pt_dist));
+            for (int j = 0; j < num_pts; ++j)
+            {
+                dense_path.push_back(p1 + (p2 - p1) * ((double)j / num_pts));
+            }
+        }
     }
-    dense_path.push_back(astar_path.back()); // 补上最后一个点
-
-    // [史诗级修复 2] 正确的时间步长 ts
-    // 现在相邻两个点之间的物理距离严格等于 ctrl_pt_dist
+    
+    // 确保最后一个点精确等于终点
+    dense_path.push_back(precise_end);
+    
+    // [调试] 打印起点和终点
+    ROS_INFO("[CEO] 重采样后路径点数：%zu, 起点 (%.2f, %.2f), 终点 (%.2f, %.2f)",
+             dense_path.size(), dense_path.front().x(), dense_path.front().y(),
+             dense_path.back().x(), dense_path.back().y());
     // 匀速飞行的时间间隔 ts = 距离 / 最大速度
     double ts = param_.ctrl_pt_dist / param_.max_vel;
     if (ts < 0.05)
@@ -107,6 +146,16 @@ bool PlannerManager::replan(const Eigen::Vector2d &start_pt, const Eigen::Vector
 
     traj_start_time_ = ros::Time::now();
     ROS_INFO("[CEO] ✅ 全局轨迹生成成功并归档！总飞行时长: %.2f 秒", local_traj_.getTimeSum());
+    // [核心修复] 记录轨迹时间偏移量，解决轨迹切换不连续问题
+    static ros::Time last_traj_start_time = ros::Time(0);
+    if (last_traj_start_time.toSec() > 0)
+    {
+        double elapsed = (traj_start_time_ - last_traj_start_time).toSec();
+        ROS_INFO_THROTTLE(1.0, "[CEO] 轨迹重规划，旧轨迹已飞行 %.2f 秒", elapsed);
+    }
+    last_traj_start_time = traj_start_time_;
+
+    ROS_INFO("[CEO] ✅ 全局轨迹生成成功并归档！总飞行时长：%.2f 秒", local_traj_.getTimeSum());
     return true;
 }
 

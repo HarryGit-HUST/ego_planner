@@ -17,11 +17,11 @@ planner:
   map_origin_x: -5.0
   map_origin_y: -10.0
   map_front_x: 5.3
-  map_back_x: -0.5
+  map_back_x: -1.0
   map_left_y: 1.0
   map_right_y: -7.5
   map_exp: 0.2
-  map_intensity_threshold: 0.5
+  map_intensity_threshold: 0.1
   safe_distance: 0.00
 
 # ==========================================
@@ -29,8 +29,8 @@ planner:
 # ==========================================
 manager:
   max_vel: 1.0
-  max_acc: 1.0
-  ctrl_pt_dist: 0.5    # B样条控制点间距
+  max_acc: 1.5
+  ctrl_pt_dist: 0.3    # B样条控制点间距
 
 # ==========================================
 # 4. 优化部 (L-BFGS Optimizer) 配置
@@ -41,5 +41,5 @@ bspline_optimizer:
   weight_feasibility: 0.1  # [修复] 动力学权重降低 10 倍，防止梯度爆炸
   safe_distance: 0.3       # 避障安全/膨胀距离 (非常关键)
   max_vel: 1.0
-  max_acc: 1.0
+  max_acc: 1.5
   max_iteration_num: 300   # 优化迭代次数
